@@ -1,0 +1,65 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::connection(config('system-log.connection'))->create(config('system-log.table', 'system_logs'), function (Blueprint $table) {
+            $table->engine = 'InnoDB';
+
+            $table->bigIncrements('id');
+
+            // Polymorphic relation — loggable_id uses varchar(36) to support
+            // both auto-increment integer PKs and UUID/ULID string PKs without
+            // requiring a schema change when a model switches key type.
+            $table->string('loggable_type', 255);
+
+            if (config('system-log.loggable_id_type', 'string') === 'bigInteger') {
+                $table->unsignedBigInteger('loggable_id');
+            } else {
+                $table->string('loggable_id', 36);
+            }
+
+            // Event that triggered the log entry: created | updated | deleted
+            $table->string('event', 50);
+
+            // JSON snapshot of the model state at the time of the event.
+            // For 'updated': ['changes' => [...], 'original' => [...]]
+            // For 'created'/'deleted': ['attributes' => [...]]
+            $table->json('payload');
+
+            // Execution context — populated asynchronously by ProcessLogContext
+            $table->string('origin', 10)->nullable();   // cli | web | job
+            $table->text('trace')->nullable();
+            $table->unsignedBigInteger('user_id')->nullable();
+            $table->json('metadata')->nullable();       // { url, input }
+
+            // Processing status: pending → complete | failed
+            $table->string('status', 20)->default('pending');
+
+            $table->timestamps();
+
+            // Composite index for the most common query pattern: "all logs for model X".
+            // loggable_id uses a 36-char prefix so the index works correctly when the
+            // column is varchar(36) (UUIDs) and remains efficient for integer PKs stored
+            // as short strings.  rawIndex() is required because Blueprint::index() does
+            // not support per-column prefix lengths.
+            $table->rawIndex('loggable_type(20), loggable_id(36)', 'idx_system_logs_loggable');
+
+            // Composite index for filtering by event type within a time range
+            $table->index(['event', 'created_at'], 'idx_system_logs_event_time');
+
+            // Index for monitoring / job-retry queries ("fetch all pending logs")
+            $table->index('status', 'idx_system_logs_status');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::connection(config('system-log.connection'))->dropIfExists(config('system-log.table', 'system_logs'));
+    }
+};

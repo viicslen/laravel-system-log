@@ -1,0 +1,62 @@
+{
+    "name": "viicslen/laravel-system-log",
+    "description": "Model activity logging with deferred database-first pattern for Laravel",
+    "keywords": [
+        "ViicSlen",
+        "laravel",
+        "system-log",
+        "activity",
+        "logging"
+    ],
+    "homepage": "https://github.com/viicslen/laravel-system-log",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "ViicSlen",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": ">=8.2",
+        "spatie/laravel-package-tools": "^1.14.0",
+        "illuminate/contracts": "^11.0"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.0",
+        "nunomaduro/collision": "^8.0",
+        "orchestra/testbench": "^9.0",
+        "pestphp/pest": "^3.0",
+        "pestphp/pest-plugin-laravel": "^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "ViicSlen\\SystemLog\\": "src/",
+            "ViicSlen\\SystemLog\\Database\\Factories\\": "database/factories/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ViicSlen\\SystemLog\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/pest",
+        "test-coverage": "vendor/bin/pest --coverage",
+        "format": "vendor/bin/pint"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "ViicSlen\\SystemLog\\SystemLogServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
