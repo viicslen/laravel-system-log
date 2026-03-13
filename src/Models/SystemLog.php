@@ -73,7 +73,7 @@ class SystemLog extends Model
      */
     public function getTable(): string
     {
-        return config('system-log.database.table', parent::getTable());
+        return config('system-log.database.table') ?? parent::getTable();
     }
 
     // -------------------------------------------------------------------------

@@ -50,11 +50,16 @@ return new class extends Migration
             $table->timestamps();
 
             // Composite index for the most common query pattern: "all logs for model X".
-            // loggable_id uses a 36-char prefix so the index works correctly when the
-            // column is varchar(36) (UUIDs) and remains efficient for integer PKs stored
-            // as short strings.  rawIndex() is required because Blueprint::index() does
-            // not support per-column prefix lengths.
-            $table->rawIndex('loggable_type(20), loggable_id(36)', 'idx_system_logs_loggable');
+            // MySQL/MariaDB support per-column prefix lengths via rawIndex(), which keeps
+            // the index compact for long varchar columns. SQLite and PostgreSQL do not
+            // support prefix lengths, so a plain two-column index is used instead.
+            $driver = Schema::connection(config('system-log.database.connection'))->getConnection()->getDriverName();
+
+            if ($driver === 'mysql' || $driver === 'mariadb') {
+                $table->rawIndex('loggable_type(20), loggable_id(36)', 'idx_system_logs_loggable');
+            } else {
+                $table->index(['loggable_type', 'loggable_id'], 'idx_system_logs_loggable');
+            }
 
             // Composite index for filtering by event type within a time range
             $table->index(['event', 'created_at'], 'idx_system_logs_event_time');
