@@ -36,6 +36,7 @@ class ModelActivityObserver
         // Pair the new values with the originals so that each changed column
         // can be diffed in a single query on the log record.
         $this->log($model, 'updated',
+            attributes: $model->getAttributes(),
             modified: $changes,
             original: array_intersect_key($model->getOriginal(), $changes),
         );
