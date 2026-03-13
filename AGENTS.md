@@ -185,7 +185,15 @@ LogStatus::Failed   // job exhausted retries (tries=3, backoff=10s)
 
 ## CI / Checks
 
-There are no GitHub Actions workflows yet. Replicate CI locally with:
+GitHub Actions workflows are defined in `.github/workflows/ci.yml` and run on every push and pull
+request to `main` / `master`. The workflow has two jobs:
+
+| Job          | Description                                      |
+|--------------|--------------------------------------------------|
+| `style`      | Runs `composer format -- --test` on PHP 8.3      |
+| `tests`      | Runs `composer test` on PHP 8.3 and 8.4 (matrix) |
+
+Replicate CI locally:
 
 ```bash
 composer install
