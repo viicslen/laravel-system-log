@@ -73,7 +73,7 @@ class ModelActivityObserver
         // at zero.  The closure captures all local variables by value, so it
         // remains self-contained even after the model instance is GC'd.
 
-        defer(static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId): void {
+        \Illuminate\Support\defer(static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId): void {
             // Step 1 — Write the heavy payload to the database first.
             //
             // This bypasses the SQS 256 KB limit: the JSON payload (which can
