@@ -153,10 +153,10 @@ readonly class ExecutionContext
         // The frame would be skipped — check whether an include pattern rescues it.
         if ($compiledInclude !== null) {
             // rescued
-            if (array_any($compiledInclude, fn ($pattern) => preg_match($pattern, $file) === 1)) {
+            if (array_any($compiledInclude, fn (string $pattern) => preg_match($pattern, $file) === 1)) {
                 return false;
             }
-        } elseif (array_any($rawInclude, fn ($path) => str_contains($file, $path))) {
+        } elseif (array_any($rawInclude, fn (string $path) => str_contains($file, $path))) {
             // rescued
             return false;
         }
