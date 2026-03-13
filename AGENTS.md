@@ -1,4 +1,4 @@
-# Copilot Instructions — viicslen/laravel-system-log
+# Agent Instructions — viicslen/laravel-system-log
 
 ## Repository Summary
 
@@ -37,12 +37,23 @@ src/
   Jobs/ProcessLogContext.php        — Queue job: enriches a pending log record with context
   Models/SystemLog.php              — Eloquent model for the system_logs table
   Observers/ModelActivityObserver.php — Handles created/updated/deleted, writes DB + dispatches job
-tests/                              — (empty) Create test files here using Pest + TestCase from testbench
-.github/copilot-instructions.md     — This file
+tests/
+  Pest.php                          — Bootstraps TestCase for Feature/ and Unit/
+  TestCase.php                      — Base: extends Orchestra, registers provider, SQLite in-memory DB
+  Feature/ServiceProviderTest.php   — Service provider boot, config publishing, container binding
+  Feature/SystemLogFeatureTest.php  — End-to-end create/update/delete logging flow
+  Unit/Concerns/HasSystemLogsTest.php    — Trait registration and systemLogs() relationship
+  Unit/DTO/ExecutionContextTest.php      — ExecutionContext::capture() and captureTrace() logic
+  Unit/Enums/LogStatusTest.php           — LogStatus enum values
+  Unit/Jobs/ProcessLogContextTest.php    — ProcessLogContext job handle() and failed() paths
+  Unit/Models/SystemLogTest.php          — SystemLog fillable, casts, scopes, relationship
+  Unit/Observers/ModelActivityObserverTest.php — Observer event handling and job dispatch
+AGENTS.md                           — Source of truth for all AI agent instructions (symlinked)
+.github/copilot-instructions.md     — Symlink → AGENTS.md (GitHub Copilot)
+CLAUDE.md                           — Symlink → AGENTS.md (Claude Code)
+GEMINI.md                           — Symlink → AGENTS.md (Gemini)
+.junie/guidelines.md                — Symlink → AGENTS.md (JetBrains Junie)
 ```
-
-There is **no `tests/` directory yet** — the test runner will exit with an error if one does not exist.
-Always create `tests/` and at least one test file before running `composer test`.
 
 ## Build & Validation Commands
 
@@ -74,8 +85,6 @@ composer test      # run Pest suite
 ```
 
 **Known issues:**
-- `composer test` fails with exit code 2 when `tests/` does not exist. Create the directory
-  and add at least one test file (e.g. `tests/Pest.php` bootstrapping testbench).
 - `composer format -- --test` exits 1 if any file needs reformatting. Always run
   `composer format` (without `--test`) to fix before committing.
 - Running `composer format -- --test` in CI without fixing first will fail. The files
@@ -121,6 +130,22 @@ LogStatus::Pending  // row created; context enrichment not yet complete
 LogStatus::Complete // job ran successfully
 LogStatus::Failed   // job exhausted retries (tries=3, backoff=10s)
 ```
+
+## Test Infrastructure
+
+- **Runner**: Pest 3 (`vendor/bin/pest`) via `composer test`
+- **Base class**: `tests/TestCase.php` extends `Orchestra\Testbench\TestCase`, registers
+  `SystemLogServiceProvider`, uses SQLite in-memory via `RefreshDatabase`.
+- **Bootstrap**: `tests/Pest.php` applies `TestCase` to `Feature/` and `Unit/`.
+- **Database setup**: `defineDatabaseMigrations()` runs the stub migration and creates a
+  `test_models` table used by test model stubs.
+- **Queue**: tests set `system-log.queue.connection = sync` so jobs run synchronously and
+  can be asserted immediately.
+- **Suite**: 64 tests / 126 assertions; runs in ~2.5 s.
+
+When adding tests, extend the appropriate directory — `tests/Feature/` for end-to-end,
+`tests/Unit/` (or the relevant subdirectory) for isolated class tests. Use the existing
+`TestCase` base; do not bootstrap the framework separately.
 
 ## CI / Checks
 
