@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace ViicSlen\SystemLog\DataTransferObjects;
+namespace ViicSlen\SystemLog\DTO;
 
 use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Auth;
@@ -26,8 +26,6 @@ readonly class ExecutionContext
         public ?int $userId,
         /** Full request URL, empty string for CLI/job contexts */
         public string $url,
-        /** Sanitized request input (sensitive keys removed) */
-        public array $input,
     ) {}
 
     // -------------------------------------------------------------------------
@@ -41,7 +39,6 @@ readonly class ExecutionContext
             trace: self::captureTrace(),
             userId: Auth::id() !== null ? (int) Auth::id() : null,
             url: App::runningInConsole() ? '' : Request::fullUrl(),
-            input: App::runningInConsole() ? [] : self::sanitisedInput(),
         );
     }
 
@@ -165,27 +162,5 @@ readonly class ExecutionContext
         }
 
         return true;
-    }
-
-    private static function sanitisedInput(): array
-    {
-        /** @var array<string> $except */
-        $except = config('system-log.input_except', [
-            'password',
-            'password_confirmation',
-            'current_password',
-            '_token',
-        ]);
-
-        $input = Request::except($except);
-
-        // Hard cap the input snapshot at ~8 KB to prevent bloat in the metadata
-        // column. If the serialized form exceeds that, we store a truncation note.
-        $encoded = json_encode($input, JSON_THROW_ON_ERROR);
-        if ($encoded !== false && mb_strlen($encoded) > 8192) {
-            return ['_truncated' => true, '_reason' => 'Input payload exceeded 8 KB snapshot limit'];
-        }
-
-        return $input;
     }
 }

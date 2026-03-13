@@ -30,7 +30,7 @@ class SystemLogServiceProvider extends PackageServiceProvider
         // Bind the configurable model so downstream code can resolve it via
         // the container rather than reading config directly.
         /** @var class-string<SystemLog> $modelClass */
-        $modelClass = config('system-log.model', SystemLog::class);
+        $modelClass = config('system-log.database.model', SystemLog::class);
 
         $this->app->bind(SystemLog::class, $modelClass);
 
@@ -56,7 +56,7 @@ class SystemLogServiceProvider extends PackageServiceProvider
         $rawInclude = config('system-log.backtrace.include_paths', []);
 
         config([
-            'system-log.backtrace.compiled_patterns'         => $compile($rawSkip),
+            'system-log.backtrace.compiled_patterns' => $compile($rawSkip),
             'system-log.backtrace.compiled_include_patterns' => $compile($rawInclude),
         ]);
     }

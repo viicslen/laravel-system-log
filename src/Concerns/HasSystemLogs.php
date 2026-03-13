@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ViicSlen\SystemLog\Concerns;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use ViicSlen\SystemLog\Models\SystemLog;
 use ViicSlen\SystemLog\Observers\ModelActivityObserver;
@@ -14,8 +15,9 @@ use ViicSlen\SystemLog\Observers\ModelActivityObserver;
  * The boot method registers the observer once per model class, so it is safe to
  * include the trait on base model classes (the observer is only registered once).
  *
- * @mixin \Illuminate\Database\Eloquent\Model
- * @phpstan-require-extends \Illuminate\Database\Eloquent\Model
+ * @mixin Model
+ *
+ * @phpstan-require-extends Model
  */
 trait HasSystemLogs
 {
@@ -34,8 +36,8 @@ trait HasSystemLogs
      */
     public function systemLogs(): MorphMany
     {
-        /** @var class-string<\Illuminate\Database\Eloquent\Model> $model */
-        $model = config('system-log.model', SystemLog::class);
+        /** @var class-string<Model> $model */
+        $model = config('system-log.database.model', SystemLog::class);
 
         return $this->morphMany($model, 'loggable');
     }

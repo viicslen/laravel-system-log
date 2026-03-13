@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ViicSlen\SystemLog\Observers;
 
 use Illuminate\Database\Eloquent\Model;
-use ViicSlen\SystemLog\DataTransferObjects\ExecutionContext;
+use ViicSlen\SystemLog\DTO\ExecutionContext;
 use ViicSlen\SystemLog\Enums\LogStatus;
 use ViicSlen\SystemLog\Jobs\ProcessLogContext;
 use ViicSlen\SystemLog\Models\SystemLog;
@@ -19,9 +19,7 @@ class ModelActivityObserver
     public function created(Model $model): void
     {
         // Snapshot the full attribute set of the newly created model.
-        $payload = ['attributes' => $model->getAttributes()];
-
-        $this->log($model, 'created', $payload);
+        $this->log($model, 'created', attributes: $model->getAttributes());
     }
 
     public function updated(Model $model): void
@@ -37,34 +35,30 @@ class ModelActivityObserver
 
         // Pair the new values with the originals so that each changed column
         // can be diffed in a single query on the log record.
-        $payload = [
-            'changes' => $changes,
-            'original' => array_intersect_key($model->getOriginal(), $changes),
-        ];
-
-        $this->log($model, 'updated', $payload);
+        $this->log($model, 'updated',
+            modified: $changes,
+            original: array_intersect_key($model->getOriginal(), $changes),
+        );
     }
 
     public function deleted(Model $model): void
     {
         // Capture the full attribute snapshot before the row disappears.
-        $payload = ['attributes' => $model->getAttributes()];
-
-        $this->log($model, 'deleted', $payload);
+        $this->log($model, 'deleted', attributes: $model->getAttributes());
     }
 
     // -------------------------------------------------------------------------
     // Core Logic
     // -------------------------------------------------------------------------
 
-    private function log(Model $model, string $event, array $payload): void
+    private function log(Model $model, string $event, ?array $attributes = null, ?array $modified = null, ?array $original = null): void
     {
         // ── SYNCHRONOUS CAPTURE ───────────────────────────────────────────────
         // Everything here runs inside the current request cycle.
         // We grab all volatile states NOW before the response is sent:
-        //   • Execution context (origin, trace, user, url, input)
+        //   • Execution context (origin, trace, user, url)
         //   • Model identifiers (morph class + primary key)
-        //   • Payload (already built by the caller)
+        //   • Payload split into attributes / modified / original columns
         //
         // We intentionally do NOT write to the DB or dispatch jobs here —
         // that would add latency to the user's TTFB.
@@ -76,10 +70,10 @@ class ModelActivityObserver
         // ── DEFERRED EXECUTION ────────────────────────────────────────────────
         // defer() schedules the closure to run after the HTTP response has been
         // sent to the browser (or after the CLI command exits), keeping TTFB
-        // at zero.  The closure captures all local variables by value so it
+        // at zero.  The closure captures all local variables by value, so it
         // remains self-contained even after the model instance is GC'd.
 
-        defer(static function () use ($event, $payload, $context, $loggableType, $loggableId): void {
+        defer(static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId): void {
             // Step 1 — Write the heavy payload to the database first.
             //
             // This bypasses the SQS 256 KB limit: the JSON payload (which can
@@ -87,14 +81,16 @@ class ModelActivityObserver
             // queue.  The queue job receives only a lightweight integer log ID.
 
             /** @var class-string<Model> $modelClass */
-            $modelClass = config('system-log.model', SystemLog::class);
+            $modelClass = config('system-log.database.model', SystemLog::class);
 
             /** @var SystemLog $log */
             $log = $modelClass::create([
                 'loggable_type' => $loggableType,
                 'loggable_id' => $loggableId,
                 'event' => $event,
-                'payload' => $payload,
+                'attributes' => $attributes,
+                'modified' => $modified,
+                'original' => $original,
                 'status' => LogStatus::Pending,
             ]);
 
@@ -108,6 +104,6 @@ class ModelActivityObserver
             ProcessLogContext::dispatch($log->id, $context)
                 ->onConnection(config('system-log.queue.connection'))
                 ->onQueue(config('system-log.queue.name', 'default'));
-        });
+        })->name("system-log.defer-log-{$model->getKey()}-{$model->getMorphClass()}-{$event}")->always();
     }
 }

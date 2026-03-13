@@ -15,7 +15,9 @@ use ViicSlen\SystemLog\Enums\LogStatus;
  * @property string $loggable_type
  * @property string $loggable_id
  * @property string $event
- * @property array<string, mixed> $payload
+ * @property array<string, mixed>|null $attributes
+ * @property array<string, mixed>|null $modified
+ * @property array<string, mixed>|null $original
  * @property string|null $origin
  * @property string|null $trace
  * @property int|null $user_id
@@ -35,7 +37,9 @@ class SystemLog extends Model
         'loggable_type',
         'loggable_id',
         'event',
-        'payload',
+        'attributes',
+        'modified',
+        'original',
         'origin',
         'trace',
         'user_id',
@@ -46,7 +50,9 @@ class SystemLog extends Model
     protected function casts(): array
     {
         return [
-            'payload' => 'array',
+            'attributes' => 'array',
+            'modified' => 'array',
+            'original' => 'array',
             'metadata' => 'array',
             'status' => LogStatus::class,
         ];
@@ -58,7 +64,7 @@ class SystemLog extends Model
      */
     public function getConnectionName(): ?string
     {
-        return config('system-log.connection') ?? parent::getConnectionName();
+        return config('system-log.database.connection') ?? parent::getConnectionName();
     }
 
     /**
@@ -67,7 +73,7 @@ class SystemLog extends Model
      */
     public function getTable(): string
     {
-        return config('system-log.table', parent::getTable());
+        return config('system-log.database.table', parent::getTable());
     }
 
     // -------------------------------------------------------------------------

@@ -1,5 +1,7 @@
 <?php
 
+use ViicSlen\SystemLog\Models\SystemLog;
+
 return [
 
     /*
@@ -13,29 +15,25 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Database Connection
+    | Database
     |--------------------------------------------------------------------------
-    | The database connection to use for the system_logs table. When null the
-    | application default connection is used. Set to a dedicated connection
-    | to isolate high-volume log writes from your OLTP workload.
+    | connection : The database connection to use for the system_logs table.
+    |              When null the application default connection is used. Set to
+    |              a dedicated connection to isolate high-volume log writes from
+    |              your OLTP workload.
+    |
+    | table      : The table name used for log entries.
+    |
+    | model      : The Eloquent model class used to represent a log entry.
+    |              Override this to extend the model with custom scopes, casts,
+    |              or relationships.
     */
-    'connection' => env('SYSTEM_LOG_CONNECTION'),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Table Name
-    |--------------------------------------------------------------------------
-    */
-    'table' => env('SYSTEM_LOG_TABLE', 'system_logs'),
-
-    /*
-    |--------------------------------------------------------------------------
-    | SystemLog Model
-    |--------------------------------------------------------------------------
-    | The Eloquent model class used to represent a log entry. Override this to
-    | extend the model with custom scopes, casts, or relationships.
-    */
-    'model' => ViicSlen\SystemLog\Models\SystemLog::class,
+    'database' => [
+        'connection' => env('SYSTEM_LOG_CONNECTION'),
+        'table' => env('SYSTEM_LOG_TABLE', 'system_logs'),
+        'model' => SystemLog::class,
+        'foreign_key_type' => env('SYSTEM_LOG_ID_TYPE', 'string'), // 'string' | 'bigInteger'
+    ],
 
     /*
     |--------------------------------------------------------------------------
@@ -47,19 +45,8 @@ return [
     */
     'queue' => [
         'connection' => env('SYSTEM_LOG_QUEUE_CONNECTION', null), // null = app default
-        'name'       => env('SYSTEM_LOG_QUEUE', 'default'),
+        'name' => env('SYSTEM_LOG_QUEUE', 'default'),
     ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Polymorphic ID Type
-    |--------------------------------------------------------------------------
-    | Controls the loggable_id column width in the migration stub.
-    | 'string' uses varchar(36) — supports both integer PKs and UUIDs.
-    | 'bigInteger' uses unsignedBigInteger — use only when all models use
-    | auto-incrementing integer PKs (smaller index, faster joins).
-    */
-    'loggable_id_type' => env('SYSTEM_LOG_ID_TYPE', 'string'), // 'string' | 'bigInteger'
 
     /*
     |--------------------------------------------------------------------------
@@ -80,8 +67,8 @@ return [
     | Empty by default (no rescues).
     */
     'backtrace' => [
-        'max_frames'    => 10,
-        'skip_paths'    => ['vendor/', 'artisan'],
+        'max_frames' => 10,
+        'skip_paths' => ['vendor/', 'artisan'],
         'include_paths' => [],
     ],
 

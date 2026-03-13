@@ -10,7 +10,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Throwable;
-use ViicSlen\SystemLog\DataTransferObjects\ExecutionContext;
+use ViicSlen\SystemLog\DTO\ExecutionContext;
 use ViicSlen\SystemLog\Enums\LogStatus;
 use ViicSlen\SystemLog\Models\SystemLog;
 
@@ -19,7 +19,7 @@ use ViicSlen\SystemLog\Models\SystemLog;
  *
  * This job deliberately carries only two things:
  *   1. An integer log ID — the heavy payload is already in the DB.
- *   2. A small ExecutionContext DTO (~2 KB) — origin, trace, user, url, input.
+ *   2. A small ExecutionContext DTO (~2 KB) — origin, trace, user, url.
  */
 class ProcessLogContext implements ShouldQueue
 {
@@ -48,7 +48,7 @@ class ProcessLogContext implements ShouldQueue
     public function handle(): void
     {
         /** @var class-string<SystemLog> $modelClass */
-        $modelClass = config('system-log.model', SystemLog::class);
+        $modelClass = config('system-log.database.model', SystemLog::class);
 
         /** @var SystemLog|null $log */
         $log = $modelClass::find($this->logId);
@@ -64,7 +64,6 @@ class ProcessLogContext implements ShouldQueue
             'user_id' => $this->context->userId,
             'metadata' => [
                 'url' => $this->context->url,
-                'input' => $this->context->input,
             ],
             'status' => LogStatus::Complete,
         ]);
@@ -75,7 +74,7 @@ class ProcessLogContext implements ShouldQueue
         // Mark the record as failed so monitoring dashboards / pruning jobs
         // can identify log entries that were never fully enriched.
         /** @var class-string<SystemLog> $modelClass */
-        $modelClass = config('system-log.model', SystemLog::class);
+        $modelClass = config('system-log.database.model', SystemLog::class);
 
         $modelClass::where('id', $this->logId)
             ->where('status', LogStatus::Pending)

@@ -8,7 +8,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::connection(config('system-log.connection'))->create(config('system-log.table', 'system_logs'), function (Blueprint $table) {
+        Schema::connection(config('system-log.database.connection'))->create(config('system-log.database.table', 'system_logs'), function (Blueprint $table) {
             $table->engine = 'InnoDB';
 
             $table->bigIncrements('id');
@@ -18,7 +18,7 @@ return new class extends Migration
             // requiring a schema change when a model switches key type.
             $table->string('loggable_type', 255);
 
-            if (config('system-log.loggable_id_type', 'string') === 'bigInteger') {
+            if (config('system-log.database.foreign_key_type', 'string') === 'bigInteger') {
                 $table->unsignedBigInteger('loggable_id');
             } else {
                 $table->string('loggable_id', 36);
@@ -27,16 +27,22 @@ return new class extends Migration
             // Event that triggered the log entry: created | updated | deleted
             $table->string('event', 50);
 
-            // JSON snapshot of the model state at the time of the event.
-            // For 'updated': ['changes' => [...], 'original' => [...]]
-            // For 'created'/'deleted': ['attributes' => [...]]
-            $table->json('payload');
+            // Payload split into purposeful columns so every event has a
+            // predictable structure without needing to inspect the event field:
+            //
+            //   created  → attributes: full model snapshot   modified: null   original: null
+            //   updated  → attributes: null                  modified: {…}    original: {…}
+            //   deleted  → attributes: full model snapshot   modified: null   original: null
+            //
+            $table->json('attributes')->nullable(); // full snapshot for created / deleted
+            $table->json('modified')->nullable();   // new property values for updated
+            $table->json('original')->nullable();   // old property values for updated
 
             // Execution context — populated asynchronously by ProcessLogContext
             $table->string('origin', 10)->nullable();   // cli | web | job
             $table->text('trace')->nullable();
             $table->unsignedBigInteger('user_id')->nullable();
-            $table->json('metadata')->nullable();       // { url, input }
+            $table->json('metadata')->nullable();       // { url }
 
             // Processing status: pending → complete | failed
             $table->string('status', 20)->default('pending');
@@ -60,6 +66,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::connection(config('system-log.connection'))->dropIfExists(config('system-log.table', 'system_logs'));
+        Schema::connection(config('system-log.database.connection'))->dropIfExists(config('system-log.database.table', 'system_logs'));
     }
 };
