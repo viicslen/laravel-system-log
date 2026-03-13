@@ -5,6 +5,8 @@ declare(strict_types=1);
 use ViicSlen\SystemLog\Models\SystemLog;
 use ViicSlen\SystemLog\SystemLogServiceProvider;
 
+covers(SystemLogServiceProvider::class);
+
 it('registers the system-log config', function () {
     expect(config('system-log'))->toBeArray()
         ->and(config('system-log.enabled'))->not->toBeNull();

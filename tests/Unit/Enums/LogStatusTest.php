@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use ViicSlen\SystemLog\Enums\LogStatus;
 
+covers(LogStatus::class);
+
 it('has correct string values', function () {
     expect(LogStatus::Pending->value)->toBe('pending')
         ->and(LogStatus::Complete->value)->toBe('complete')

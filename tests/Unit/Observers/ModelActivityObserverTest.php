@@ -10,6 +10,8 @@ use ViicSlen\SystemLog\Jobs\ProcessLogContext;
 use ViicSlen\SystemLog\Models\SystemLog;
 use ViicSlen\SystemLog\Observers\ModelActivityObserver;
 
+covers(ModelActivityObserver::class);
+
 // Helper to create an anonymous model for testing
 function makeTestModel(array $attributes = []): Model
 {

@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
 use ViicSlen\SystemLog\Enums\LogStatus;
 use ViicSlen\SystemLog\Models\SystemLog;
 
+covers(SystemLog::class);
+
 it('has correct fillable fields', function () {
     $log = new SystemLog;
 

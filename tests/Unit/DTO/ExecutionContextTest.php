@@ -7,6 +7,8 @@ use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Auth;
 use ViicSlen\SystemLog\DTO\ExecutionContext;
 
+covers(ExecutionContext::class);
+
 it('captures web origin when not running in console', function () {
     App::shouldReceive('runningInConsole')->andReturn(false);
 

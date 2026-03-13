@@ -8,6 +8,8 @@ use ViicSlen\SystemLog\Enums\LogStatus;
 use ViicSlen\SystemLog\Jobs\ProcessLogContext;
 use ViicSlen\SystemLog\Models\SystemLog;
 
+covers(ProcessLogContext::class);
+
 it('updates log with context data on handle', function () {
     Queue::fake();
 

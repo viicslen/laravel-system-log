@@ -9,6 +9,14 @@ use ViicSlen\SystemLog\Concerns\HasSystemLogs;
 use ViicSlen\SystemLog\Enums\LogStatus;
 use ViicSlen\SystemLog\Jobs\ProcessLogContext;
 use ViicSlen\SystemLog\Models\SystemLog;
+use ViicSlen\SystemLog\Observers\ModelActivityObserver;
+
+covers(
+    HasSystemLogs::class,
+    ModelActivityObserver::class,
+    ProcessLogContext::class,
+    SystemLog::class,
+);
 
 // A concrete loggable model used across feature tests
 class TestLoggableModel extends Model

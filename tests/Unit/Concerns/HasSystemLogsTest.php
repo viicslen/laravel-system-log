@@ -9,6 +9,8 @@ use Illuminate\Support\Facades\Queue;
 use ViicSlen\SystemLog\Concerns\HasSystemLogs;
 use ViicSlen\SystemLog\Models\SystemLog;
 
+covers(HasSystemLogs::class);
+
 // Shared test model definition
 function makeLoggableModel(): Model
 {
