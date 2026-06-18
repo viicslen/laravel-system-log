@@ -17,6 +17,13 @@ use Illuminate\Support\Facades\Request;
  */
 readonly class ExecutionContext
 {
+    /**
+     * Root namespace of this package. Frames originating from the package's own
+     * machinery (observer, DTO capture) are always stripped from the trace so
+     * the recorded backtrace begins at the consumer's call site.
+     */
+    private const PACKAGE_NAMESPACE = 'ViicSlen\\SystemLog\\';
+
     public function __construct(
         /** 'web' | 'cli' | 'job' */
         public string $origin,
@@ -86,12 +93,18 @@ readonly class ExecutionContext
         $filtered = [];
         foreach ($frames as $frame) {
             $file = $frame['file'] ?? '';
+            $class = $frame['class'] ?? '';
+
+            // Always drop the package's own frames — they are an artifact of the
+            // capture mechanism, not part of the consumer's call stack.
+            if ($class !== '' && str_starts_with($class, self::PACKAGE_NAMESPACE)) {
+                continue;
+            }
 
             if (self::shouldSkipFrame($file, $compiledSkip, $compiledInclude, $rawSkip, $rawInclude)) {
                 continue;
             }
 
-            $class = $frame['class'] ?? '';
             $function = $frame['function'] ?? '';
             $line = $frame['line'] ?? 0;
             $fileShort = $file !== '' ? str_replace(base_path().'/', '', $file) : 'unknown';

@@ -117,6 +117,18 @@ it('backtrace skips vendor frames by default', function () {
     }
 });
 
+it('backtrace always strips the package own frames', function () {
+    config()->offsetUnset('system-log.backtrace.compiled_patterns');
+    config()->set('system-log.backtrace.skip_paths', []);
+    config()->set('system-log.backtrace.max_frames', 50);
+
+    $context = ExecutionContext::capture();
+
+    foreach (explode("\n", $context->trace) as $frame) {
+        expect($frame)->not->toContain('ViicSlen\\SystemLog\\');
+    }
+});
+
 it('backtrace include paths rescue frames from skip list', function () {
     config()->offsetUnset('system-log.backtrace.compiled_patterns');
     config()->set('system-log.backtrace.skip_paths', ['vendor/']);
