@@ -37,6 +37,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Scope Bridge
+    |--------------------------------------------------------------------------
+    | The log row is written via defer() — after the HTTP response is sent or
+    | the console command exits. By then, ambient context the write depends on
+    | (e.g. an active multi-tenant database connection) may have been torn down,
+    | sending the insert to the wrong database.
+    |
+    | Set this to a class implementing ViicSlen\SystemLog\Contracts\ScopeBridge
+    | to snapshot that context synchronously and restore it around the deferred
+    | write. When null, the write runs inline with no wrapping.
+    */
+    'scope' => env('SYSTEM_LOG_SCOPE'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Queue Configuration
     |--------------------------------------------------------------------------
     | The ProcessLogContext job is dispatched to this queue/connection after

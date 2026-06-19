@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ViicSlen\SystemLog\Observers;
 
 use Illuminate\Database\Eloquent\Model;
+use ViicSlen\SystemLog\Contracts\ScopeBridge;
 use ViicSlen\SystemLog\DTO\ExecutionContext;
 use ViicSlen\SystemLog\Enums\LogStatus;
 use ViicSlen\SystemLog\Jobs\ProcessLogContext;
@@ -68,43 +69,74 @@ class ModelActivityObserver
         $loggableType = $model->getMorphClass();
         $loggableId = (string) $model->getKey();
 
+        // Snapshot the ambient scope (e.g. the active tenant) NOW, while the
+        // originating request/command is still bound. The deferred write below
+        // runs after that lifecycle ends, by which point scoped state — like a
+        // multi-tenant database connection — may have reverted to its default.
+        $bridge = $this->scopeBridge();
+        $scope = $bridge?->capture();
+
         // ── DEFERRED EXECUTION ────────────────────────────────────────────────
         // defer() schedules the closure to run after the HTTP response has been
         // sent to the browser (or after the CLI command exits), keeping TTFB
         // at zero.  The closure captures all local variables by value, so it
         // remains self-contained even after the model instance is GC'd.
 
-        \Illuminate\Support\defer(static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId): void {
+        \Illuminate\Support\defer(static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId, $bridge, $scope): void {
             // Step 1 — Write the heavy payload to the database first.
             //
             // This bypasses the SQS 256 KB limit: the JSON payload (which can
             // be several hundred KB for large model diffs) never enters the
             // queue.  The queue job receives only a lightweight integer log ID.
 
-            /** @var class-string<Model> $modelClass */
-            $modelClass = config('system-log.database.model', SystemLog::class);
+            $write = static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId): void {
+                /** @var class-string<Model> $modelClass */
+                $modelClass = config('system-log.database.model', SystemLog::class);
 
-            /** @var SystemLog $log */
-            $log = $modelClass::create([
-                'loggable_type' => $loggableType,
-                'loggable_id' => $loggableId,
-                'event' => $event,
-                'attributes' => $attributes,
-                'modified' => $modified,
-                'original' => $original,
-                'status' => LogStatus::Pending,
-            ]);
+                /** @var SystemLog $log */
+                $log = $modelClass::create([
+                    'loggable_type' => $loggableType,
+                    'loggable_id' => $loggableId,
+                    'event' => $event,
+                    'attributes' => $attributes,
+                    'modified' => $modified,
+                    'original' => $original,
+                    'status' => LogStatus::Pending,
+                ]);
 
-            // Step 2 — Dispatch the lightweight job that enriches the log record
-            // with execution context (origin, trace, user_id, metadata).
-            //
-            // The job payload going to SQS is tiny:
-            //   • log ID → is 8 bytes
-            //   • context → ~2 KB at most
+                // Step 2 — Dispatch the lightweight job that enriches the log
+                // record with execution context (origin, trace, user_id,
+                // metadata).
+                //
+                // The job payload going to SQS is tiny:
+                //   • log ID → is 8 bytes
+                //   • context → ~2 KB at most
 
-            ProcessLogContext::dispatch($log->id, $context)
-                ->onConnection(config('system-log.queue.connection'))
-                ->onQueue(config('system-log.queue.name', 'default'));
+                ProcessLogContext::dispatch($log->id, $context)
+                    ->onConnection(config('system-log.queue.connection'))
+                    ->onQueue(config('system-log.queue.name', 'default'));
+            };
+
+            // Restore the captured scope around the write so the row lands on
+            // the correct (e.g. tenant) connection. Without a bridge the write
+            // runs inline, preserving the previous behaviour.
+            $bridge ? $bridge->restore($scope, $write) : $write();
         })->name("system-log.defer-log-{$model->getKey()}-{$model->getMorphClass()}-{$event}")->always();
+    }
+
+    /**
+     * Resolve the optional scope bridge that restores ambient context around
+     * the deferred write. Returns null when none is configured.
+     */
+    private function scopeBridge(): ?ScopeBridge
+    {
+        /** @var class-string<ScopeBridge>|ScopeBridge|null $bridge */
+        $bridge = config('system-log.scope');
+
+        if ($bridge === null) {
+            return null;
+        }
+
+        return $bridge instanceof ScopeBridge ? $bridge : app($bridge);
     }
 }

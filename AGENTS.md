@@ -161,19 +161,20 @@ large payloads to this job — the entire point is to stay under queue message s
 
 ## Configuration Reference (`config/system-log.php`)
 
-| Key                         | Default                  | Notes                                                           |
-|-----------------------------|--------------------------|-----------------------------------------------------------------|
-| `enabled`                   | `true`                   | Set `SYSTEM_LOG_ENABLED=false` to disable observer registration |
-| `database.connection`       | `null`                   | Dedicated DB connection, or `null` for app default              |
-| `database.table`            | `system_logs`            | Override via `SYSTEM_LOG_TABLE`                                 |
-| `database.model`            | `SystemLog::class`       | Override to extend the model                                    |
-| `database.foreign_key_type` | `string`                 | `string` = varchar(36) UUIDs; `bigInteger` = unsignedBigInteger |
-| `queue.connection`          | `null`                   | Queue connection for `ProcessLogContext` job                    |
-| `queue.name`                | `default`                | Queue name                                                      |
-| `backtrace.max_frames`      | `10`                     | Max stack frames kept                                           |
-| `backtrace.skip_paths`      | `['vendor/', 'artisan']` | Glob patterns to exclude from trace                             |
-| `backtrace.include_paths`   | `[]`                     | Glob patterns to rescue frames from skip list                   |
-| `input_except`              | `['password', …]`        | Request keys stripped from metadata                             |
+| Key                         | Default                  | Notes                                                                                                     |
+|-----------------------------|--------------------------|-----------------------------------------------------------------------------------------------------------|
+| `enabled`                   | `true`                   | Set `SYSTEM_LOG_ENABLED=false` to disable observer registration                                           |
+| `database.connection`       | `null`                   | Dedicated DB connection, or `null` for app default                                                        |
+| `database.table`            | `system_logs`            | Override via `SYSTEM_LOG_TABLE`                                                                           |
+| `database.model`            | `SystemLog::class`       | Override to extend the model                                                                              |
+| `database.foreign_key_type` | `string`                 | `string` = varchar(36) UUIDs; `bigInteger` = unsignedBigInteger                                           |
+| `scope`                     | `null`                   | `ScopeBridge` class restoring ambient (e.g. tenant) context around the deferred write; `SYSTEM_LOG_SCOPE` |
+| `queue.connection`          | `null`                   | Queue connection for `ProcessLogContext` job                                                              |
+| `queue.name`                | `default`                | Queue name                                                                                                |
+| `backtrace.max_frames`      | `10`                     | Max stack frames kept                                                                                     |
+| `backtrace.skip_paths`      | `['vendor/', 'artisan']` | Glob patterns to exclude from trace                                                                       |
+| `backtrace.include_paths`   | `[]`                     | Glob patterns to rescue frames from skip list                                                             |
+| `input_except`              | `['password', …]`        | Request keys stripped from metadata                                                                       |
 
 ## LogStatus Enum
 

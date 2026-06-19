@@ -5,12 +5,47 @@ declare(strict_types=1);
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Defer\DeferredCallbackCollection;
 use Illuminate\Support\Facades\Queue;
+use ViicSlen\SystemLog\Contracts\ScopeBridge;
 use ViicSlen\SystemLog\Enums\LogStatus;
 use ViicSlen\SystemLog\Jobs\ProcessLogContext;
 use ViicSlen\SystemLog\Models\SystemLog;
 use ViicSlen\SystemLog\Observers\ModelActivityObserver;
 
 covers(ModelActivityObserver::class);
+
+// Records bridge interactions and wraps the deferred write so the test can
+// assert the observer captured scope synchronously and restored it around the
+// write.
+class RecordingScopeBridge implements ScopeBridge
+{
+    public static bool $captured = false;
+
+    public static bool $restored = false;
+
+    public static mixed $scope = null;
+
+    public static function reset(): void
+    {
+        self::$captured = false;
+        self::$restored = false;
+        self::$scope = null;
+    }
+
+    public function capture(): mixed
+    {
+        self::$captured = true;
+
+        return 'tenant-123';
+    }
+
+    public function restore(mixed $scope, Closure $callback): void
+    {
+        self::$restored = true;
+        self::$scope = $scope;
+
+        $callback();
+    }
+}
 
 // Helper to create an anonymous model for testing
 function makeTestModel(array $attributes = []): Model
@@ -154,4 +189,43 @@ it('stores only changed keys in original for updated event', function () {
     // original should only contain the keys that changed
     expect($log->original)->toHaveKey('name')
         ->and($log->original)->not->toHaveKey('email');
+});
+
+it('captures scope synchronously and restores it around the deferred write', function () {
+    Queue::fake();
+    RecordingScopeBridge::reset();
+    config(['system-log.scope' => RecordingScopeBridge::class]);
+
+    $observer = new ModelActivityObserver;
+    $model = makeTestModel(['name' => 'Heidi']);
+    $model->id = 7;
+
+    $observer->created($model);
+
+    // capture() runs synchronously, before the deferred write is flushed.
+    expect(RecordingScopeBridge::$captured)->toBeTrue()
+        ->and(RecordingScopeBridge::$restored)->toBeFalse();
+
+    app(DeferredCallbackCollection::class)->invoke();
+
+    // restore() wrapped the write, receiving the captured token, and the write
+    // still produced the log row.
+    expect(RecordingScopeBridge::$restored)->toBeTrue()
+        ->and(RecordingScopeBridge::$scope)->toBe('tenant-123')
+        ->and(SystemLog::count())->toBe(1);
+});
+
+it('writes inline when no scope bridge is configured', function () {
+    Queue::fake();
+    config(['system-log.scope' => null]);
+
+    $observer = new ModelActivityObserver;
+    $model = makeTestModel(['name' => 'Ivan']);
+    $model->id = 8;
+
+    $observer->created($model);
+
+    app(DeferredCallbackCollection::class)->invoke();
+
+    expect(SystemLog::count())->toBe(1);
 });
