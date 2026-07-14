@@ -6,6 +6,7 @@ namespace ViicSlen\SystemLog\Models;
 
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\MassPrunable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use ViicSlen\SystemLog\Enums\LogStatus;
@@ -33,6 +34,8 @@ use ViicSlen\SystemLog\Enums\LogStatus;
  */
 class SystemLog extends Model
 {
+    use MassPrunable;
+
     protected $fillable = [
         'loggable_type',
         'loggable_id',
@@ -56,6 +59,24 @@ class SystemLog extends Model
             'metadata' => 'array',
             'status' => LogStatus::class,
         ];
+    }
+
+    /**
+     * Mass-delete log rows older than the configured retention window in
+     * batches (native `model:prune`). A non-positive retention value disables
+     * pruning by returning a query that matches nothing.
+     *
+     * @return Builder<static>
+     */
+    public function prunable(): Builder
+    {
+        $days = (int) config('system-log.prune.retention_days', 0);
+
+        if ($days <= 0) {
+            return static::query()->whereRaw('1 = 0');
+        }
+
+        return static::query()->where('created_at', '<', now()->subDays($days));
     }
 
     /**

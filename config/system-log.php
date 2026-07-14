@@ -37,6 +37,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Pruning
+    |--------------------------------------------------------------------------
+    | retention_days : log rows older than this many days are deleted (in
+    | batches) by Laravel's `model:prune` command. Set to 0 (or negative) to
+    | disable pruning entirely. Schedule pruning in the host app, e.g.:
+    |
+    |   Schedule::command('model:prune', [
+    |       '--model' => [\ViicSlen\SystemLog\Models\SystemLog::class],
+    |   ])->daily();
+    */
+    'prune' => [
+        'retention_days' => env('SYSTEM_LOG_RETENTION_DAYS', 60),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Scope Bridge
     |--------------------------------------------------------------------------
     | The log row is written via defer() — after the HTTP response is sent or

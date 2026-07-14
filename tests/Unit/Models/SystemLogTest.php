@@ -147,3 +147,30 @@ it('loggable relationship returns morph to', function () {
 
     expect($log->loggable())->toBeInstanceOf(MorphTo::class);
 });
+
+it('prune deletes logs older than the retention window', function () {
+    config()->set('system-log.prune.retention_days', 30);
+
+    $old = SystemLog::create(['loggable_type' => 'User', 'loggable_id' => '1', 'event' => 'created', 'status' => LogStatus::Complete]);
+    $old->forceFill(['created_at' => now()->subDays(45)])->saveQuietly();
+
+    SystemLog::create(['loggable_type' => 'User', 'loggable_id' => '2', 'event' => 'created', 'status' => LogStatus::Complete]);
+
+    expect(SystemLog::count())->toBe(2);
+
+    (new SystemLog)->pruneAll();
+
+    expect(SystemLog::count())->toBe(1)
+        ->and(SystemLog::first()->loggable_id)->toBe('2');
+});
+
+it('prune deletes nothing when retention is disabled', function () {
+    config()->set('system-log.prune.retention_days', 0);
+
+    $old = SystemLog::create(['loggable_type' => 'User', 'loggable_id' => '1', 'event' => 'created', 'status' => LogStatus::Complete]);
+    $old->forceFill(['created_at' => now()->subYears(5)])->saveQuietly();
+
+    (new SystemLog)->pruneAll();
+
+    expect(SystemLog::count())->toBe(1);
+});
