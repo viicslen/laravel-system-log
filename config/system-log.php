@@ -105,6 +105,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Payload Value Truncation
+    |--------------------------------------------------------------------------
+    | max_value_length : any string value in the attributes / modified /
+    | original JSON payload longer than this many characters is truncated (a
+    | "…[truncated]" marker is appended) before the row is written. This caps
+    | the row size when a model has a large text column (e.g. an HTML
+    | description). Set to null to disable truncation and store full values.
+    */
+    'attributes' => [
+        'max_value_length' => env('SYSTEM_LOG_MAX_VALUE_LENGTH', 1000),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Sanitised Input Fields
     |--------------------------------------------------------------------------
     | These request keys are stripped from the metadata.input snapshot to

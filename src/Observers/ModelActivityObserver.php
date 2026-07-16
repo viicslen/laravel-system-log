@@ -65,6 +65,17 @@ class ModelActivityObserver
         // We intentionally do NOT write to the DB or dispatch jobs here —
         // that would add latency to the user's TTFB.
 
+        // Cap oversized string values so a single wide/long-text column (e.g.
+        // an HTML description) can't bloat the stored JSON payload. Applies to
+        // every payload column; a null length disables truncation.
+        $maxLength = config('system-log.attributes.max_value_length');
+
+        if ($maxLength !== null) {
+            $attributes = self::truncateValues($attributes, (int) $maxLength);
+            $modified = self::truncateValues($modified, (int) $maxLength);
+            $original = self::truncateValues($original, (int) $maxLength);
+        }
+
         $context = ExecutionContext::capture();
         $loggableType = $model->getMorphClass();
         $loggableId = (string) $model->getKey();
@@ -122,6 +133,29 @@ class ModelActivityObserver
             // runs inline, preserving the previous behaviour.
             $bridge ? $bridge->restore($scope, $write) : $write();
         })->name("system-log.defer-log-{$model->getKey()}-{$model->getMorphClass()}-{$event}")->always();
+    }
+
+    /**
+     * Recursively truncate string values longer than $max characters, appending
+     * a marker so truncation is visible in the stored payload. Non-string
+     * scalars and nested array structure are preserved.
+     *
+     * @param  array<string, mixed>|null  $data
+     * @return array<string, mixed>|null
+     */
+    private static function truncateValues(?array $data, int $max): ?array
+    {
+        if ($data === null || $max <= 0) {
+            return $data;
+        }
+
+        array_walk_recursive($data, static function (mixed &$value) use ($max): void {
+            if (is_string($value) && mb_strlen($value) > $max) {
+                $value = mb_substr($value, 0, $max).'…[truncated]';
+            }
+        });
+
+        return $data;
     }
 
     /**

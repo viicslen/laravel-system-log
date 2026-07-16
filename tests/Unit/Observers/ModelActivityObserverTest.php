@@ -229,3 +229,40 @@ it('writes inline when no scope bridge is configured', function () {
 
     expect(SystemLog::count())->toBe(1);
 });
+
+it('truncates payload string values longer than the configured max length', function () {
+    Queue::fake();
+    config(['system-log.attributes.max_value_length' => 10]);
+
+    $observer = new ModelActivityObserver;
+    $model = makeTestModel(['name' => str_repeat('a', 50)]);
+    $model->id = 9;
+
+    $observer->created($model);
+
+    app(DeferredCallbackCollection::class)->invoke();
+
+    $log = SystemLog::first();
+
+    expect($log->attributes['name'])->toBe(str_repeat('a', 10).'…[truncated]');
+});
+
+it('leaves short values and non-strings untouched, and disables truncation when null', function () {
+    Queue::fake();
+    config(['system-log.attributes.max_value_length' => null]);
+
+    $observer = new ModelActivityObserver;
+    $long = str_repeat('b', 100);
+    $model = makeTestModel(['name' => $long, 'id' => 12345]);
+    $model->id = 10;
+
+    $observer->created($model);
+
+    app(DeferredCallbackCollection::class)->invoke();
+
+    $log = SystemLog::first();
+
+    // null length stores the full value; the integer id is never truncated.
+    expect($log->attributes['name'])->toBe($long)
+        ->and($log->attributes['id'])->toBe(10);
+});
