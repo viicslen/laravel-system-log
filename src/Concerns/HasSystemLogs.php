@@ -6,6 +6,7 @@ namespace ViicSlen\SystemLog\Concerns;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
+use ReflectionClass;
 use ViicSlen\SystemLog\Models\SystemLog;
 use ViicSlen\SystemLog\Observers\ModelActivityObserver;
 
@@ -28,7 +29,35 @@ trait HasSystemLogs
             return;
         }
 
-        static::observe(ModelActivityObserver::class);
+        static::registerSystemLogObserver(ModelActivityObserver::class);
+    }
+
+    /**
+     * Bind the observer's handlers to this model's events.
+     *
+     * Model::observe() cannot be used here: it does `new static` internally, and
+     * from Laravel 13 instantiating a model while that same model is booting
+     * throws a LogicException. This registers the observer the same way
+     * Model::registerObserver() does, without needing an instance.
+     *
+     * @param  class-string  $observer
+     */
+    protected static function registerSystemLogObserver(string $observer): void
+    {
+        /** @var array<int, string> $observables */
+        $observables = (new ReflectionClass(static::class))->getDefaultProperties()['observables'] ?? [];
+
+        $events = array_merge([
+            'retrieved', 'creating', 'created', 'updating', 'updated',
+            'saving', 'saved', 'restoring', 'restored', 'replicating',
+            'trashed', 'deleting', 'deleted', 'forceDeleting', 'forceDeleted',
+        ], $observables);
+
+        foreach ($events as $event) {
+            if (method_exists($observer, $event)) {
+                static::registerModelEvent($event, $observer.'@'.$event);
+            }
+        }
     }
 
     /**
