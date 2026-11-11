@@ -97,6 +97,7 @@ final class History
         $model = config('system-log.database.model', SystemLog::class);
 
         return $model::query()
+            ->select(['id', 'loggable_type', 'loggable_id', 'event', 'attributes', 'modified', 'original', 'user_id', 'metadata', 'created_at'])
             ->where('loggable_type', $loggableType)
             ->where('loggable_id', (string) $loggableId)
             ->orderByDesc('created_at')
