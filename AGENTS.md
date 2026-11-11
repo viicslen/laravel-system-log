@@ -24,8 +24,8 @@ backtrace, user ID, URL). This keeps TTFB at zero and stays under the SQS 256 KB
 |---------------------|-----------------------------------------|
 | Type                | Laravel package (not a full app)        |
 | Language            | PHP ≥ 8.2                               |
-| Framework           | Laravel 11 / illuminate/contracts ^11.0 |
-| Test runner         | Pest 3 via `orchestra/testbench` 9      |
+| Framework           | Laravel 11–13 / illuminate/contracts ^11.0\|^12.0\|^13.0 |
+| Test runner         | Pest 4 via `orchestra/testbench` 9–11   |
 | Linter/formatter    | Laravel Pint 1                          |
 | Package helper      | spatie/laravel-package-tools ^1.14      |
 | PHP runtime (local) | PHP 8.4                                 |
