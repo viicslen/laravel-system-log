@@ -7,6 +7,7 @@ namespace ViicSlen\SystemLog;
 use Spatie\LaravelPackageTools\Commands\InstallCommand;
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
+use ViicSlen\SystemLog\Console\CompactCommand;
 use ViicSlen\SystemLog\Models\SystemLog;
 
 class SystemLogServiceProvider extends PackageServiceProvider
@@ -17,6 +18,7 @@ class SystemLogServiceProvider extends PackageServiceProvider
             ->name('system-log')
             ->hasConfigFile()
             ->hasMigrations(['create_system_logs_table', 'add_changed_at_micros_to_system_logs_table'])
+            ->hasCommand(CompactCommand::class)
             ->hasInstallCommand(function (InstallCommand $command) {
                 $command
                     ->publishConfigFile()

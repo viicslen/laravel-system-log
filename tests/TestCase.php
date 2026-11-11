@@ -47,6 +47,9 @@ class TestCase extends Orchestra
             $table->bigIncrements('id');
             $table->string('name');
             $table->string('email')->nullable();
+            $table->text('body')->nullable();
+            $table->text('data')->nullable();
+            $table->unsignedInteger('views')->default(0);
             $table->timestamps();
         });
     }

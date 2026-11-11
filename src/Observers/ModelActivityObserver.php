@@ -10,6 +10,8 @@ use ViicSlen\SystemLog\DTO\ExecutionContext;
 use ViicSlen\SystemLog\Enums\LogStatus;
 use ViicSlen\SystemLog\Jobs\ProcessLogContext;
 use ViicSlen\SystemLog\Models\SystemLog;
+use ViicSlen\SystemLog\Support\LogOptions;
+use ViicSlen\SystemLog\Support\PayloadEncoder;
 
 class ModelActivityObserver
 {
@@ -21,34 +23,63 @@ class ModelActivityObserver
 
     public function created(Model $model): void
     {
-        // Snapshot the full attribute set of the newly created model.
-        $this->log($model, 'created', attributes: $model->getAttributes());
+        $options = LogOptions::for($model);
+
+        $this->log($model, 'created', attributes: $this->snapshot($model, $options, $options->snapshotCreated));
     }
 
     public function updated(Model $model): void
     {
-        // getChanges() returns only the columns that actually changed.
-        // Skip entirely if Eloquent fired the event with no real changes
-        // (e.g. touch() calls that only update timestamps).
-        $changes = $model->getChanges();
+        $options = LogOptions::for($model);
 
-        if (empty($changes)) {
+        // getChanges() returns only the columns that actually changed. Skip the
+        // row when nothing but excluded columns (and the timestamp riding along
+        // with them) changed, e.g. touch() calls.
+        $changes = PayloadEncoder::withoutExcluded($options, $model->getChanges());
+
+        if (array_diff_key($changes, array_flip(array_filter([$model->getUpdatedAtColumn()]))) === []) {
             return;
         }
 
-        // Pair the new values with the originals so that each changed column
-        // can be diffed in a single query on the log record.
+        if ($options->mode === LogOptions::DIFF) {
+            [$modified, $original] = PayloadEncoder::change($options, $model->getRawOriginal(), $changes, $model->getCasts());
+
+            $this->log($model, 'updated', modified: $modified, original: $original);
+
+            return;
+        }
+
+        [$modified, $original] = PayloadEncoder::change(
+            $options,
+            array_intersect_key($model->getOriginal(), $changes),
+            $changes,
+            $model->getCasts(),
+        );
+
         $this->log($model, 'updated',
-            attributes: config('system-log.attributes.snapshot_updates', true) ? $model->getAttributes() : null,
-            modified: $changes,
-            original: array_intersect_key($model->getOriginal(), $changes),
+            attributes: $this->snapshot($model, $options, true),
+            modified: $modified,
+            original: $original,
         );
     }
 
     public function deleted(Model $model): void
     {
-        // Capture the full attribute snapshot before the row disappears.
-        $this->log($model, 'deleted', attributes: $model->getAttributes());
+        $options = LogOptions::for($model);
+
+        $this->log($model, 'deleted', attributes: $this->snapshot($model, $options, $options->snapshotDeleted));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function snapshot(Model $model, LogOptions $options, bool $keep): ?array
+    {
+        if ($options->mode === LogOptions::DIFF && ! $keep) {
+            return null;
+        }
+
+        return PayloadEncoder::snapshot($options, $model->getAttributes(), $model->getCasts());
     }
 
     // -------------------------------------------------------------------------
@@ -66,17 +97,6 @@ class ModelActivityObserver
         //
         // We intentionally do NOT write to the DB or dispatch jobs here —
         // that would add latency to the user's TTFB.
-
-        // Cap oversized string values so a single wide/long-text column (e.g.
-        // an HTML description) can't bloat the stored JSON payload. Applies to
-        // every payload column; a null length disables truncation.
-        $maxLength = config('system-log.attributes.max_value_length');
-
-        if ($maxLength !== null) {
-            $attributes = self::truncateValues($attributes, (int) $maxLength);
-            $modified = self::truncateValues($modified, (int) $maxLength);
-            $original = self::truncateValues($original, (int) $maxLength);
-        }
 
         $context = ExecutionContext::capture();
         // The change's own time, not the deferred insert's: two requests can finish their deferred
@@ -142,29 +162,6 @@ class ModelActivityObserver
             // Unique per write: defer() replaces a callback with the same name, which dropped every
             // save of a model but the last one in a request or job.
         })->name('system-log.defer-log-'.++self::$sequence."-{$model->getKey()}-{$model->getMorphClass()}-{$event}")->always();
-    }
-
-    /**
-     * Recursively truncate string values longer than $max characters, appending
-     * a marker so truncation is visible in the stored payload. Non-string
-     * scalars and nested array structure are preserved.
-     *
-     * @param  array<string, mixed>|null  $data
-     * @return array<string, mixed>|null
-     */
-    private static function truncateValues(?array $data, int $max): ?array
-    {
-        if ($data === null || $max <= 0) {
-            return $data;
-        }
-
-        array_walk_recursive($data, static function (mixed &$value) use ($max): void {
-            if (is_string($value) && mb_strlen($value) > $max) {
-                $value = mb_substr($value, 0, $max).'…[truncated]';
-            }
-        });
-
-        return $data;
     }
 
     /**

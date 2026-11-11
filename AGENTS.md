@@ -176,6 +176,14 @@ large payloads to this job — the entire point is to stay under queue message s
 | `backtrace.skip_paths`      | `['vendor/', 'artisan']` | Glob patterns to exclude from trace                                                                       |
 | `backtrace.include_paths`   | `[]`                     | Glob patterns to rescue frames from skip list                                                             |
 | `input_except`              | `['password', …]`        | Request keys stripped from metadata                                                                       |
+| `payload.mode`              | `full`                   | `diff` stores only `modified`/`original` on updates; past states are rebuilt (`History`)                  |
+| `payload.snapshot_created` / `snapshot_deleted` | `true` | In `diff` mode, whether created / deleted rows keep a snapshot                                   |
+| `exclude`                   | `[]`                     | Columns never logged; an update touching only these writes no row                                         |
+| `attributes.max_value_length` | `1000`                 | Values longer than this go through a long-value strategy                                                  |
+| `attributes.strategy` / `columns` / `casts` | `truncate` | `truncate`, `omit`, `json` (changed keys only) or `patch` (reverse patch), globally / per column / per cast |
+| `compaction.enabled` / `after_days` | `false` / `60`   | `system-log:compact` merges update rows into one row per model per month; never pruned by age             |
+| `prune.enabled` / `retention_days` | `true` / `60`     | Age pruning via `model:prune`                                                                             |
+| `models`                    | `[]`                     | Per-model overrides of the keys above, keyed by model class                                               |
 
 ## LogStatus Enum
 

@@ -126,9 +126,9 @@ it('creates a log entry on model updated event with changes', function () {
         ->and($log->original)->toBeArray();
 });
 
-it('omits the attribute snapshot on updates when snapshot_updates is off', function () {
+it('stores only modified and original on updates in diff mode', function () {
     Queue::fake();
-    config(['system-log.attributes.snapshot_updates' => false]);
+    config(['system-log.payload.mode' => 'diff']);
 
     $model = makeTestModel(['name' => 'Dana', 'email' => 'dana@example.com']);
     $model->id = 4;

@@ -11,13 +11,16 @@ use Illuminate\Database\Eloquent\MassPrunable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use ViicSlen\SystemLog\Enums\LogStatus;
+use ViicSlen\SystemLog\Support\Compactor;
+use ViicSlen\SystemLog\Support\History;
+use ViicSlen\SystemLog\Support\LogOptions;
 
 /**
  * @property int $id
  * @property string $loggable_type
  * @property string $loggable_id
  * @property string $event
- * @property array<string, mixed>|null $attributes Stored snapshot, or rebuilt by {@see self::replayedAttributes()} on `updated` rows written without one
+ * @property array<string, mixed>|null $attributes Stored snapshot, or rebuilt by {@see self::rebuiltAttributes()} on update rows written without one
  * @property array<string, mixed>|null $modified
  * @property array<string, mixed>|null $original
  * @property string|null $origin
@@ -71,86 +74,75 @@ class SystemLog extends Model
     {
         return Attribute::get(fn (?string $value): ?array => $value !== null
             ? $this->fromJson($value)
-            : $this->replayedAttributes()
+            : $this->rebuiltAttributes()
         )->shouldCache();
     }
 
     /**
-     * Best-effort post-update state of an `updated` row stored without a snapshot.
-     *
-     * Rows are ordered by the change's own time (`created_at`, then `changed_at_micros`), then `id`.
-     *
-     * Starts from the nearest earlier row of the same model that kept a full snapshot and replays
-     * every later `modified` up to and including this row. With no snapshot left in retention, it
-     * replays what is there, so columns no retained row touched are absent. Writes that bypass
-     * model events (query-builder updates) are invisible here, so a replayed value can be stale
-     * where the stored snapshot would not have been.
+     * The snapshot stored on this row, without rebuilding one.
      *
      * @return array<string, mixed>|null
      */
-    public function replayedAttributes(): ?array
+    public function storedAttributes(): ?array
     {
-        if ($this->event !== 'updated') {
-            return null;
-        }
+        $raw = $this->getAttributes()['attributes'] ?? null;
 
-        $deltas = [$this->modified ?? []];
-        $state = [];
-
-        if ($this->exists) {
-            $createdAt = $this->getRawOriginal('created_at');
-            // Rows written before the column existed sort first within their second, as `orderByDesc` puts nulls last.
-            $micros = $this->changed_at_micros ?? 0;
-
-            $earlier = static::query()
-                ->toBase()
-                ->where('loggable_type', $this->loggable_type)
-                ->where('loggable_id', $this->loggable_id)
-                ->where(fn ($query) => $query
-                    ->where('created_at', '<', $createdAt)
-                    ->orWhere(fn ($query) => $query
-                        ->where('created_at', $createdAt)
-                        ->where(fn ($query) => $query
-                            ->whereRaw('coalesce(changed_at_micros, 0) < ?', [$micros])
-                            ->orWhere(fn ($query) => $query
-                                ->whereRaw('coalesce(changed_at_micros, 0) = ?', [$micros])
-                                ->where($this->getKeyName(), '<', $this->getKey())))))
-                ->orderByDesc('created_at')
-                ->orderByDesc('changed_at_micros')
-                ->orderByDesc($this->getKeyName())
-                ->select(['attributes', 'modified'])
-                ->cursor();
-
-            foreach ($earlier as $row) {
-                if ($row->attributes !== null) {
-                    $state = $this->fromJson($row->attributes);
-
-                    break;
-                }
-
-                $deltas[] = $row->modified !== null ? $this->fromJson($row->modified) : [];
-            }
-        }
-
-        return array_replace($state, ...array_reverse($deltas));
+        return $raw === null ? null : $this->fromJson($raw);
     }
 
     /**
-     * Mass-delete log rows older than the configured retention window in
-     * batches (native `model:prune`). A non-positive retention value disables
-     * pruning by returning a query that matches nothing.
+     * The model's attributes right after this row, rebuilt from the live row by {@see History}
+     * for an update stored without a snapshot. Null for other rows.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function rebuiltAttributes(): ?array
+    {
+        if (! $this->exists || ! in_array($this->event, ['updated', Compactor::EVENT], true)) {
+            return null;
+        }
+
+        return History::stateAt($this->loggable_type, $this->loggable_id, $this);
+    }
+
+    /**
+     * Mass-delete log rows older than their model's retention window in
+     * batches (native `model:prune`). A model with pruning off, a non-positive
+     * retention, or compaction on is never pruned by age.
      *
      * @return Builder<static>
      */
     public function prunable(): Builder
     {
-        $days = (int) config('system-log.prune.retention_days', 0);
+        $global = LogOptions::for('');
+        $configured = array_map(LogOptions::morphClass(...), LogOptions::configuredModels());
+        $branches = [];
 
-        if ($days <= 0) {
+        if ($global->prune && ! $global->compaction) {
+            $branches[] = fn (Builder $query) => $query
+                ->where('created_at', '<', now()->subDays($global->retentionDays))
+                ->when($configured !== [], fn (Builder $query) => $query->whereNotIn('loggable_type', $configured));
+        }
+
+        foreach (LogOptions::configuredModels() as $class) {
+            $options = LogOptions::for($class);
+
+            if ($options->prune && ! $options->compaction) {
+                $branches[] = fn (Builder $query) => $query
+                    ->where('loggable_type', LogOptions::morphClass($class))
+                    ->where('created_at', '<', now()->subDays($options->retentionDays));
+            }
+        }
+
+        if ($branches === []) {
             return static::query()->whereRaw('1 = 0');
         }
 
-        return static::query()->where('created_at', '<', now()->subDays($days));
+        return static::query()->where(function (Builder $query) use ($branches): void {
+            foreach ($branches as $branch) {
+                $query->orWhere($branch);
+            }
+        });
     }
 
     /**
