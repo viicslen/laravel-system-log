@@ -26,6 +26,7 @@ use ViicSlen\SystemLog\Enums\LogStatus;
  * @property array<string, mixed>|null $metadata
  * @property LogStatus $status
  * @property Carbon|null $created_at
+ * @property int|null $changed_at_micros Microseconds since the epoch at the change; null on rows written before the column existed
  * @property Carbon|null $updated_at
  *
  * @method static Builder<static> pending()
@@ -58,6 +59,7 @@ class SystemLog extends Model
             'modified' => 'array',
             'original' => 'array',
             'metadata' => 'array',
+            'changed_at_micros' => 'integer',
             'status' => LogStatus::class,
         ];
     }
@@ -76,7 +78,7 @@ class SystemLog extends Model
     /**
      * Best-effort post-update state of an `updated` row stored without a snapshot.
      *
-     * Rows are ordered by `created_at` (the change's own time), then `id`.
+     * Rows are ordered by the change's own time (`created_at`, then `changed_at_micros`), then `id`.
      *
      * Starts from the nearest earlier row of the same model that kept a full snapshot and replays
      * every later `modified` up to and including this row. With no snapshot left in retention, it
@@ -96,16 +98,25 @@ class SystemLog extends Model
         $state = [];
 
         if ($this->exists) {
+            $createdAt = $this->getRawOriginal('created_at');
+            // Rows written before the column existed sort first within their second, as `orderByDesc` puts nulls last.
+            $micros = $this->changed_at_micros ?? 0;
+
             $earlier = static::query()
                 ->toBase()
                 ->where('loggable_type', $this->loggable_type)
                 ->where('loggable_id', $this->loggable_id)
                 ->where(fn ($query) => $query
-                    ->where('created_at', '<', $this->getRawOriginal('created_at'))
+                    ->where('created_at', '<', $createdAt)
                     ->orWhere(fn ($query) => $query
-                        ->where('created_at', $this->getRawOriginal('created_at'))
-                        ->where($this->getKeyName(), '<', $this->getKey())))
+                        ->where('created_at', $createdAt)
+                        ->where(fn ($query) => $query
+                            ->whereRaw('coalesce(changed_at_micros, 0) < ?', [$micros])
+                            ->orWhere(fn ($query) => $query
+                                ->whereRaw('coalesce(changed_at_micros, 0) = ?', [$micros])
+                                ->where($this->getKeyName(), '<', $this->getKey())))))
                 ->orderByDesc('created_at')
+                ->orderByDesc('changed_at_micros')
                 ->orderByDesc($this->getKeyName())
                 ->select(['attributes', 'modified'])
                 ->cursor();

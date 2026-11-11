@@ -58,6 +58,7 @@ composer.json                       — Package manifest; defines autoload, scri
 config/system-log.php               — Published config (enabled, database, queue, backtrace, input_except)
 database/migrations/
   create_system_logs_table.php.stub — Stub migration published to host app
+  add_changed_at_micros_to_system_logs_table.php.stub — Upgrade: nullable `changed_at_micros`; existing hosts must publish and run it before deploying the observer that writes it
 src/
   SystemLogServiceProvider.php      — Boot: registers config, migration, compiles backtrace glob patterns
   Concerns/HasSystemLogs.php        — Trait: add to any Eloquent model to enable logging
@@ -114,7 +115,7 @@ composer format -- --test
 - **Base class**: `tests/TestCase.php` extends `Orchestra\Testbench\TestCase`, registers
   `SystemLogServiceProvider`, uses SQLite in-memory via `RefreshDatabase`.
 - **Bootstrap**: `tests/Pest.php` applies `TestCase` to `Feature/` and `Unit/`.
-- **Database**: `defineDatabaseMigrations()` runs the stub migration and creates a `test_models`
+- **Database**: `defineDatabaseMigrations()` runs both stub migrations and creates a `test_models`
   table used by in-test model stubs.
 - **Queue**: `system-log.queue.connection = sync` in tests — jobs run synchronously and can be
   asserted immediately after the triggering model event.

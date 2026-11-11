@@ -119,6 +119,7 @@ class ModelActivityObserver
                     'original' => $original,
                     'status' => LogStatus::Pending,
                     'created_at' => $changedAt,
+                    'changed_at_micros' => (int) $changedAt->format('Uu'),
                 ]);
 
                 // Step 2 — Dispatch the lightweight job that enriches the log

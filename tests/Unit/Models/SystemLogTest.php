@@ -225,3 +225,18 @@ it('replays in change order even when the rows were inserted out of order', func
     expect(SystemLog::find($earlier->id)->attributes)->toBe(['status' => 'running', 'price' => 10])
         ->and(SystemLog::find($later->id)->attributes)->toBe(['status' => 'running', 'price' => 12]);
 });
+
+it('orders changes within the same second by their microsecond time, not by insert order', function () {
+    $snapshot = writeLog('1', 'created', ['status' => 'draft', 'price' => 10]);
+    $later = writeLog('1', 'updated', modified: ['price' => 12]);
+    $earlier = writeLog('1', 'updated', modified: ['status' => 'running']);
+
+    foreach ([$snapshot, $later, $earlier] as $log) {
+        $log->forceFill(['created_at' => '2026-01-01 10:00:00'])->saveQuietly();
+    }
+    $later->forceFill(['changed_at_micros' => 1_767_261_600_900_000])->saveQuietly();
+    $earlier->forceFill(['changed_at_micros' => 1_767_261_600_100_000])->saveQuietly();
+
+    expect(SystemLog::find($earlier->id)->attributes)->toBe(['status' => 'running', 'price' => 10])
+        ->and(SystemLog::find($later->id)->attributes)->toBe(['status' => 'running', 'price' => 12]);
+});

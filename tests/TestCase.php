@@ -38,9 +38,9 @@ class TestCase extends Orchestra
 
     protected function defineDatabaseMigrations(): void
     {
-        $migration = include __DIR__.'/../database/migrations/create_system_logs_table.php.stub';
-
-        $migration->up();
+        foreach (['create_system_logs_table', 'add_changed_at_micros_to_system_logs_table'] as $stub) {
+            (include __DIR__."/../database/migrations/{$stub}.php.stub")->up();
+        }
 
         // Auxiliary table used by test models
         $this->app['db']->connection()->getSchemaBuilder()->create('test_models', function (Blueprint $table) {

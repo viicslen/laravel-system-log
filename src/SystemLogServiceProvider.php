@@ -16,7 +16,7 @@ class SystemLogServiceProvider extends PackageServiceProvider
         $package
             ->name('system-log')
             ->hasConfigFile()
-            ->hasMigration('create_system_logs_table')
+            ->hasMigrations(['create_system_logs_table', 'add_changed_at_micros_to_system_logs_table'])
             ->hasInstallCommand(function (InstallCommand $command) {
                 $command
                     ->publishConfigFile()

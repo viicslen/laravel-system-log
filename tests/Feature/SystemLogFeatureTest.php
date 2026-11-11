@@ -194,5 +194,8 @@ it('dates a row at the change, not at the deferred write', function () {
     $this->travelTo('2026-01-01 10:05:00');
     app(DeferredCallbackCollection::class)->invoke();
 
-    expect(SystemLog::query()->value('created_at')->toDateTimeString())->toBe('2026-01-01 10:00:00');
+    $log = SystemLog::query()->sole();
+
+    expect($log->created_at->toDateTimeString())->toBe('2026-01-01 10:00:00')
+        ->and($log->changed_at_micros)->toBe(1_767_261_600_000_000);
 });
