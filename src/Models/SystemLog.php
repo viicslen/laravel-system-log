@@ -6,6 +6,7 @@ namespace ViicSlen\SystemLog\Models;
 
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\MassPrunable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
@@ -16,7 +17,7 @@ use ViicSlen\SystemLog\Enums\LogStatus;
  * @property string $loggable_type
  * @property string $loggable_id
  * @property string $event
- * @property array<string, mixed>|null $attributes
+ * @property array<string, mixed>|null $attributes Stored snapshot, or rebuilt by {@see self::replayedAttributes()} on `updated` rows written without one
  * @property array<string, mixed>|null $modified
  * @property array<string, mixed>|null $original
  * @property string|null $origin
@@ -59,6 +60,61 @@ class SystemLog extends Model
             'metadata' => 'array',
             'status' => LogStatus::class,
         ];
+    }
+
+    /**
+     * @return Attribute<array<string, mixed>|null, never>
+     */
+    protected function attributes(): Attribute
+    {
+        return Attribute::get(fn (?string $value): ?array => $value !== null
+            ? $this->fromJson($value)
+            : $this->replayedAttributes()
+        )->shouldCache();
+    }
+
+    /**
+     * Best-effort post-update state of an `updated` row stored without a snapshot.
+     *
+     * Starts from the nearest earlier row of the same model that kept a full snapshot and replays
+     * every later `modified` up to and including this row. With no snapshot left in retention, it
+     * replays what is there, so columns no retained row touched are absent. Writes that bypass
+     * model events (query-builder updates) are invisible here, so a replayed value can be stale
+     * where the stored snapshot would not have been.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function replayedAttributes(): ?array
+    {
+        if ($this->event !== 'updated') {
+            return null;
+        }
+
+        $deltas = [$this->modified ?? []];
+        $state = [];
+
+        if ($this->exists) {
+            $earlier = static::query()
+                ->toBase()
+                ->where('loggable_type', $this->loggable_type)
+                ->where('loggable_id', $this->loggable_id)
+                ->where($this->getKeyName(), '<', $this->getKey())
+                ->orderByDesc($this->getKeyName())
+                ->select(['attributes', 'modified'])
+                ->cursor();
+
+            foreach ($earlier as $row) {
+                if ($row->attributes !== null) {
+                    $state = $this->fromJson($row->attributes);
+
+                    break;
+                }
+
+                $deltas[] = $row->modified !== null ? $this->fromJson($row->modified) : [];
+            }
+        }
+
+        return array_replace($state, ...array_reverse($deltas));
     }
 
     /**

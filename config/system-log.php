@@ -112,9 +112,14 @@ return [
     | "…[truncated]" marker is appended) before the row is written. This caps
     | the row size when a model has a large text column (e.g. an HTML
     | description). Set to null to disable truncation and store full values.
+    |
+    | snapshot_updates : when false, `updated` rows store only `modified` /
+    | `original`; `SystemLog::$attributes` is then rebuilt on read by
+    | replaying earlier rows (see SystemLog::replayedAttributes()).
     */
     'attributes' => [
         'max_value_length' => env('SYSTEM_LOG_MAX_VALUE_LENGTH', 1000),
+        'snapshot_updates' => env('SYSTEM_LOG_SNAPSHOT_UPDATES', true),
     ],
 
     /*

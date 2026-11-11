@@ -174,3 +174,41 @@ it('prune deletes nothing when retention is disabled', function () {
 
     expect(SystemLog::count())->toBe(1);
 });
+
+function writeLog(string $loggableId, string $event, ?array $attributes = null, ?array $modified = null): SystemLog
+{
+    return SystemLog::create([
+        'loggable_type' => 'Listing',
+        'loggable_id' => $loggableId,
+        'event' => $event,
+        'attributes' => $attributes,
+        'modified' => $modified,
+        'status' => LogStatus::Complete,
+    ]);
+}
+
+it('rebuilds a missing update snapshot from the nearest earlier snapshot', function () {
+    writeLog('1', 'created', ['status' => 'draft', 'title' => 'Old', 'price' => 10]);
+    writeLog('1', 'updated', ['status' => 'draft', 'title' => 'Ignored', 'price' => 99]);
+    writeLog('2', 'updated', modified: ['title' => 'Other listing']);
+    writeLog('1', 'updated', modified: ['status' => 'running']);
+    $last = writeLog('1', 'updated', modified: ['price' => 12]);
+
+    expect(SystemLog::find($last->id)->attributes)
+        ->toBe(['status' => 'running', 'title' => 'Ignored', 'price' => 12]);
+});
+
+it('replays only the retained deltas when no snapshot is left', function () {
+    writeLog('1', 'updated', modified: ['status' => 'running', 'price' => 10]);
+    $last = writeLog('1', 'updated', modified: ['price' => 12]);
+
+    expect(SystemLog::find($last->id)->attributes)->toBe(['status' => 'running', 'price' => 12]);
+});
+
+it('keeps a stored snapshot and does not replay created or deleted rows', function () {
+    $stored = writeLog('1', 'updated', ['status' => 'ended'], ['status' => 'ended']);
+    $created = writeLog('2', 'created');
+
+    expect(SystemLog::find($stored->id)->attributes)->toBe(['status' => 'ended'])
+        ->and(SystemLog::find($created->id)->attributes)->toBeNull();
+});
