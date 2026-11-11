@@ -13,6 +13,8 @@ use ViicSlen\SystemLog\Models\SystemLog;
 
 class ModelActivityObserver
 {
+    private static int $sequence = 0;
+
     // -------------------------------------------------------------------------
     // Event Handlers
     // -------------------------------------------------------------------------
@@ -77,6 +79,9 @@ class ModelActivityObserver
         }
 
         $context = ExecutionContext::capture();
+        // The change's own time, not the deferred insert's: two requests can finish their deferred
+        // writes in the reverse order of the changes they log.
+        $changedAt = now();
         $loggableType = $model->getMorphClass();
         $loggableId = (string) $model->getKey();
 
@@ -93,19 +98,19 @@ class ModelActivityObserver
         // at zero.  The closure captures all local variables by value, so it
         // remains self-contained even after the model instance is GC'd.
 
-        \Illuminate\Support\defer(static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId, $bridge, $scope): void {
+        \Illuminate\Support\defer(static function () use ($event, $attributes, $modified, $original, $context, $changedAt, $loggableType, $loggableId, $bridge, $scope): void {
             // Step 1 — Write the heavy payload to the database first.
             //
             // This bypasses the SQS 256 KB limit: the JSON payload (which can
             // be several hundred KB for large model diffs) never enters the
             // queue.  The queue job receives only a lightweight integer log ID.
 
-            $write = static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId): void {
+            $write = static function () use ($event, $attributes, $modified, $original, $context, $changedAt, $loggableType, $loggableId): void {
                 /** @var class-string<Model> $modelClass */
                 $modelClass = config('system-log.database.model', SystemLog::class);
 
                 /** @var SystemLog $log */
-                $log = $modelClass::create([
+                $log = $modelClass::forceCreate([
                     'loggable_type' => $loggableType,
                     'loggable_id' => $loggableId,
                     'event' => $event,
@@ -113,6 +118,7 @@ class ModelActivityObserver
                     'modified' => $modified,
                     'original' => $original,
                     'status' => LogStatus::Pending,
+                    'created_at' => $changedAt,
                 ]);
 
                 // Step 2 — Dispatch the lightweight job that enriches the log
@@ -132,7 +138,9 @@ class ModelActivityObserver
             // the correct (e.g. tenant) connection. Without a bridge the write
             // runs inline, preserving the previous behaviour.
             $bridge ? $bridge->restore($scope, $write) : $write();
-        })->name("system-log.defer-log-{$model->getKey()}-{$model->getMorphClass()}-{$event}")->always();
+            // Unique per write: defer() replaces a callback with the same name, which dropped every
+            // save of a model but the last one in a request or job.
+        })->name('system-log.defer-log-'.++self::$sequence."-{$model->getKey()}-{$model->getMorphClass()}-{$event}")->always();
     }
 
     /**

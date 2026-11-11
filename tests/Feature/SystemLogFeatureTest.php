@@ -171,3 +171,28 @@ it('multiple model creates produce separate log entries', function () {
 
     expect(SystemLog::count())->toBe(3);
 });
+
+it('logs every save of a model in one request', function () {
+    Queue::fake();
+
+    $model = TestLoggableModel::create(['name' => 'a']);
+    $model->update(['name' => 'b']);
+    $model->update(['name' => 'c']);
+
+    app(DeferredCallbackCollection::class)->invoke();
+
+    expect(SystemLog::query()->where('event', 'updated')->orderBy('id')->pluck('modified')->all())
+        ->toBe([['name' => 'b'], ['name' => 'c']]);
+});
+
+it('dates a row at the change, not at the deferred write', function () {
+    Queue::fake();
+
+    $this->travelTo('2026-01-01 10:00:00');
+    TestLoggableModel::create(['name' => 'a']);
+
+    $this->travelTo('2026-01-01 10:05:00');
+    app(DeferredCallbackCollection::class)->invoke();
+
+    expect(SystemLog::query()->value('created_at')->toDateTimeString())->toBe('2026-01-01 10:00:00');
+});

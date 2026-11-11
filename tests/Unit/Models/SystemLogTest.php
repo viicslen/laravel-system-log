@@ -212,3 +212,16 @@ it('keeps a stored snapshot and does not replay created or deleted rows', functi
     expect(SystemLog::find($stored->id)->attributes)->toBe(['status' => 'ended'])
         ->and(SystemLog::find($created->id)->attributes)->toBeNull();
 });
+
+it('replays in change order even when the rows were inserted out of order', function () {
+    $snapshot = writeLog('1', 'created', ['status' => 'draft', 'price' => 10]);
+    $later = writeLog('1', 'updated', modified: ['price' => 12]);
+    $earlier = writeLog('1', 'updated', modified: ['status' => 'running']);
+
+    $snapshot->forceFill(['created_at' => '2026-01-01 10:00:00'])->saveQuietly();
+    $later->forceFill(['created_at' => '2026-01-01 10:02:00'])->saveQuietly();
+    $earlier->forceFill(['created_at' => '2026-01-01 10:01:00'])->saveQuietly();
+
+    expect(SystemLog::find($earlier->id)->attributes)->toBe(['status' => 'running', 'price' => 10])
+        ->and(SystemLog::find($later->id)->attributes)->toBe(['status' => 'running', 'price' => 12]);
+});

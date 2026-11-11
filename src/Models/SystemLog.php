@@ -76,6 +76,8 @@ class SystemLog extends Model
     /**
      * Best-effort post-update state of an `updated` row stored without a snapshot.
      *
+     * Rows are ordered by `created_at` (the change's own time), then `id`.
+     *
      * Starts from the nearest earlier row of the same model that kept a full snapshot and replays
      * every later `modified` up to and including this row. With no snapshot left in retention, it
      * replays what is there, so columns no retained row touched are absent. Writes that bypass
@@ -98,7 +100,12 @@ class SystemLog extends Model
                 ->toBase()
                 ->where('loggable_type', $this->loggable_type)
                 ->where('loggable_id', $this->loggable_id)
-                ->where($this->getKeyName(), '<', $this->getKey())
+                ->where(fn ($query) => $query
+                    ->where('created_at', '<', $this->getRawOriginal('created_at'))
+                    ->orWhere(fn ($query) => $query
+                        ->where('created_at', $this->getRawOriginal('created_at'))
+                        ->where($this->getKeyName(), '<', $this->getKey())))
+                ->orderByDesc('created_at')
                 ->orderByDesc($this->getKeyName())
                 ->select(['attributes', 'modified'])
                 ->cursor();
