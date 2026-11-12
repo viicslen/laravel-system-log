@@ -38,7 +38,7 @@ class TestCase extends Orchestra
 
     protected function defineDatabaseMigrations(): void
     {
-        foreach (['create_system_logs_table', 'add_changed_at_micros_to_system_logs_table'] as $stub) {
+        foreach (['create_system_logs_table', 'add_changed_at_micros_to_system_logs_table', 'add_type_time_index_to_system_logs_table'] as $stub) {
             (include __DIR__."/../database/migrations/{$stub}.php.stub")->up();
         }
 

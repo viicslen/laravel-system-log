@@ -110,37 +110,30 @@ class SystemLog extends Model
      * batches (native `model:prune`). A model with pruning off, a non-positive
      * retention, or compaction on is never pruned by age.
      *
+     * One equality branch per stored `loggable_type`, so each is an exact range on the
+     * (`loggable_type`, `created_at`) index however many kept rows of other types are older.
+     *
      * @return Builder<static>
      */
     public function prunable(): Builder
     {
-        $global = LogOptions::for('');
-        $configured = array_map(LogOptions::morphClass(...), LogOptions::configuredModels());
-        $branches = [];
+        $cutoffs = [];
 
-        if ($global->prune && ! $global->compaction) {
-            $branches[] = fn (Builder $query) => $query
-                ->where('created_at', '<', now()->subDays($global->retentionDays))
-                ->when($configured !== [], fn (Builder $query) => $query->whereNotIn('loggable_type', $configured));
-        }
-
-        foreach (LogOptions::configuredModels() as $class) {
-            $options = LogOptions::for($class);
+        foreach (static::query()->distinct()->pluck('loggable_type') as $type) {
+            $options = LogOptions::for(LogOptions::modelClass($type));
 
             if ($options->prune && ! $options->compaction) {
-                $branches[] = fn (Builder $query) => $query
-                    ->where('loggable_type', LogOptions::morphClass($class))
-                    ->where('created_at', '<', now()->subDays($options->retentionDays));
+                $cutoffs[$type] = now()->subDays($options->retentionDays);
             }
         }
 
-        if ($branches === []) {
+        if ($cutoffs === []) {
             return static::query()->whereRaw('1 = 0');
         }
 
-        return static::query()->where(function (Builder $query) use ($branches): void {
-            foreach ($branches as $branch) {
-                $query->orWhere($branch);
+        return static::query()->where(function (Builder $query) use ($cutoffs): void {
+            foreach ($cutoffs as $type => $cutoff) {
+                $query->orWhere(fn (Builder $query) => $query->where('loggable_type', $type)->where('created_at', '<', $cutoff));
             }
         });
     }

@@ -117,7 +117,22 @@ final class LinePatch
             $tail++;
         }
 
+        // Cut on character boundaries: a hunk splitting a multibyte character is not valid UTF-8,
+        // so it cannot be stored as JSON.
+        while ($head > 0 && (self::isContinuation($old, $head) || self::isContinuation($new, $head))) {
+            $head--;
+        }
+
+        while ($tail > 0 && self::isContinuation($old, strlen($old) - $tail)) {
+            $tail--;
+        }
+
         return [$start + $head, strlen($old) - $head - $tail, substr($new, $head, strlen($new) - $head - $tail)];
+    }
+
+    private static function isContinuation(string $value, int $offset): bool
+    {
+        return $offset < strlen($value) && (ord($value[$offset]) & 0xC0) === 0x80;
     }
 
     /**

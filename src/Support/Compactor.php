@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace ViicSlen\SystemLog\Support;
 
 use DateTimeInterface;
+use Generator;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\DB;
 use ViicSlen\SystemLog\Models\SystemLog;
 
 /**
@@ -32,33 +32,43 @@ final class Compactor
     public static function compact(string $loggableType, string|int $loggableId, DateTimeInterface $before): ?int
     {
         $class = LogOptions::modelClass($loggableType);
-
-        if (self::changedRecently($class, $loggableType, $loggableId)) {
-            return null;
-        }
-
         $options = LogOptions::for($class);
         $casts = is_subclass_of($class, Model::class) ? (new $class)->getCasts() : [];
 
-        return DB::connection((new SystemLog)->getConnectionName())->transaction(function () use ($loggableType, $loggableId, $before, $options, $casts): int {
-            $removed = 0;
-
-            foreach (self::segments($loggableType, $loggableId, $before) as $segment) {
-                $removed += self::merge($segment, $options, $casts);
+        $run = static function () use ($class, $loggableType, $loggableId, $before, $options, $casts): ?int {
+            if (self::changedRecently($class, $loggableId)) {
+                return null;
             }
 
-            return $removed;
-        });
+            return self::logModel()->getConnection()->transaction(function () use ($loggableType, $loggableId, $before, $options, $casts): int {
+                $removed = 0;
+
+                // Merged as each run closes, so memory holds one month of one model at a time.
+                foreach (self::segments($loggableType, $loggableId, $before) as $segment) {
+                    $removed += self::merge($segment, $options, $casts);
+                }
+
+                return $removed;
+            });
+        };
+
+        // The live row stays locked while it is walked: a write landing mid-compaction would anchor
+        // the walk on a value the older rows do not lead back from.
+        return is_subclass_of($class, Model::class) ? (new $class)->getConnection()->transaction($run) : $run();
     }
 
+    /** Merged-away rows deleted per statement while a run is still being read. */
+    private const int DELETE_BATCH = 1000;
+
     /**
-     * Runs of eligible rows, each with the state after its newest row and before its oldest.
+     * Runs of eligible rows, folded as they are read: the run keeps its newest row, the state
+     * after it and before its oldest, and per column the oldest stored old value and the newest
+     * stored new value. The other rows are deleted in batches as the run grows.
      *
-     * @return list<array{rows: list<SystemLog>, end: array<string, mixed>|null, start: array<string, mixed>|null}>
+     * @return Generator<int, array<string, mixed>>
      */
-    private static function segments(string $loggableType, string|int $loggableId, DateTimeInterface $before): array
+    private static function segments(string $loggableType, string|int $loggableId, DateTimeInterface $before): Generator
     {
-        $segments = [];
         $current = null;
 
         foreach (History::walk($loggableType, $loggableId) as [$row, $after, $previous]) {
@@ -66,7 +76,7 @@ final class Compactor
             $month = $row->created_at->format('Y-m');
 
             if ($current !== null && (! $eligible || $current['month'] !== $month)) {
-                $segments[] = $current;
+                yield $current;
                 $current = null;
             }
 
@@ -74,102 +84,148 @@ final class Compactor
                 continue;
             }
 
-            $current ??= ['month' => $month, 'rows' => [], 'end' => $after, 'start' => null];
-            $current['rows'][] = $row;
+            $current ??= [
+                'month' => $month, 'keeper' => $row, 'end' => $after, 'count' => 0, 'changes' => 0,
+                'users' => [], 'modified' => [], 'original' => [], 'anchored' => false, 'pinned' => [], 'pending' => [], 'removed' => 0,
+            ];
+
             $current['start'] = $previous;
+            $current['count']++;
+            $current['changes'] += $row->event === self::EVENT ? (int) ($row->metadata['changes'] ?? 1) : 1;
+            $current['from'] = $row->event === self::EVENT
+                ? $row->metadata['from'] ?? $row->getRawOriginal('created_at')
+                : $row->getRawOriginal('created_at');
+            $current['anchored'] = $current['anchored'] || $row->storedAttributes() !== null;
+            $current['modified'] += $row->modified ?? [];
+            // Newest stored evidence per column (per key, for JSON diffs); a row's change sits over its snapshot.
+            $evidence = $row->storedAttributes() ?? [];
+
+            foreach ($row->modified ?? [] as $column => $value) {
+                $evidence[$column] = array_key_exists($column, $evidence) ? PayloadEncoder::over($value, $evidence[$column]) : $value;
+            }
+
+            foreach ($evidence as $column => $value) {
+                $current['pinned'][$column] = array_key_exists($column, $current['pinned'])
+                    ? PayloadEncoder::over($current['pinned'][$column], $value)
+                    : $value;
+            }
+
+            foreach ($row->original ?? [] as $column => $value) {
+                $current['original'][$column] = $value;
+            }
+
+            foreach ([...($row->event === self::EVENT ? $row->metadata['users'] ?? [] : []), $row->user_id] as $user) {
+                if ($user !== null) {
+                    $current['users'][$user] = true;
+                }
+            }
+
+            if ($row->isNot($current['keeper'])) {
+                $current['pending'][] = $row->id;
+            }
+
+            if (count($current['pending']) >= self::DELETE_BATCH) {
+                $current['removed'] += self::delete($current['pending']);
+                $current['pending'] = [];
+            }
         }
 
         if ($current !== null) {
-            $segments[] = $current;
+            yield $current;
         }
-
-        return $segments;
     }
 
     /**
-     * @param  array{month: string, rows: list<SystemLog>, end: array<string, mixed>|null, start: array<string, mixed>|null}  $segment
+     * @param  array<string, mixed>  $segment
      * @param  array<string, string>  $casts
      */
     private static function merge(array $segment, LogOptions $options, array $casts): int
     {
-        $rows = $segment['rows'];
-        $keeper = $rows[0];
+        /** @var SystemLog $keeper */
+        $keeper = $segment['keeper'];
 
-        if (count($rows) === 1 && $keeper->event === self::EVENT) {
+        if ($segment['count'] === 1 && $keeper->event === self::EVENT) {
             return 0;
         }
 
-        $oldestFirst = array_reverse($rows);
-        $columns = array_unique(array_merge(...array_map(
-            static fn (SystemLog $row): array => array_keys(($row->modified ?? []) + ($row->original ?? [])),
-            $rows,
-        )));
-
+        $start = $segment['start'] ?? [];
+        // Each column ends at the run's own newest stored value (a change or a snapshot), not at what
+        // newer state carries back: a change whose log row is still deferred is already in it.
+        $end = $segment['end'] === null ? null : PayloadEncoder::redo($segment['end'], $segment['pinned']);
+        $endState = $end ?? [];
         $modified = [];
         $original = [];
 
-        foreach ($columns as $column) {
-            $start = $segment['start'] ?? [];
-            $end = $segment['end'] ?? [];
+        // A snapshot in the run pins columns no recorded change touched, so the start can differ
+        // from the end there too; carry those as well, or the end snapshot would overwrite them.
+        $columns = $segment['modified'] + $segment['original'] + ($segment['anchored'] ? $start + $endState : []);
 
-            if (array_key_exists($column, $start) && array_key_exists($column, $end)) {
-                if ($start[$column] === $end[$column]) {
+        foreach (array_keys(PayloadEncoder::withoutExcluded($options, $columns)) as $column) {
+            if (array_key_exists($column, $start) && array_key_exists($column, $endState)) {
+                if ($start[$column] === $endState[$column]) {
                     continue;
                 }
 
-                [$new, $old] = PayloadEncoder::change($options, [$column => $start[$column]], [$column => $end[$column]], $casts);
+                [$new, $old] = PayloadEncoder::change($options, [$column => $start[$column]], [$column => $endState[$column]], $casts);
                 $modified[$column] = $new[$column];
                 $original[$column] = $old[$column];
 
                 continue;
             }
 
-            // An unrecoverable end of the run: keep the first stored old value and the last new one.
-            foreach ($oldestFirst as $row) {
-                if (array_key_exists($column, $row->original ?? [])) {
-                    $original[$column] ??= $row->original[$column];
-                }
+            // An unrecoverable end of the run: keep the oldest stored old value and the newest new one.
+            if (array_key_exists($column, $segment['original'])) {
+                $original[$column] = $segment['original'][$column];
+            }
 
-                if (array_key_exists($column, $row->modified ?? [])) {
-                    $modified[$column] = $row->modified[$column];
-                }
+            if (array_key_exists($column, $segment['modified'])) {
+                $modified[$column] = $segment['modified'][$column];
             }
         }
 
-        $changes = 0;
-        $users = [];
-
-        foreach ($rows as $row) {
-            $changes += $row->event === self::EVENT ? (int) ($row->metadata['changes'] ?? 1) : 1;
-            $users = [...$users, ...($row->metadata['users'] ?? []), $row->user_id];
-        }
-
-        $users = array_values(array_unique(array_filter($users, static fn (mixed $user): bool => $user !== null)));
+        $users = array_keys($segment['users']);
 
         $keeper->forceFill([
             'event' => self::EVENT,
-            'attributes' => null,
+            // A run that held a snapshot keeps one at its end, so values a write outside model
+            // events changed stay pinned for the months before it.
+            'attributes' => $segment['anchored'] && $end !== null ? PayloadEncoder::snapshot($options, $end, $casts) : null,
             'modified' => $modified,
             'original' => $original,
             'trace' => null,
             'user_id' => count($users) === 1 ? $users[0] : null,
             'metadata' => [
                 'period' => $segment['month'],
-                'changes' => $changes,
+                // When the run's first change happened: the merged rows before the kept one are gone.
+                'from' => $segment['from'],
+                'changes' => $segment['changes'],
                 'users' => $users,
             ],
         ])->saveQuietly();
 
-        $others = array_map(static fn (SystemLog $row): int => $row->id, array_slice($rows, 1));
-
-        if ($others !== []) {
-            $keeper->newQuery()->whereKey($others)->delete();
-        }
-
-        return count($others);
+        return $segment['removed'] + self::delete($segment['pending']);
     }
 
-    private static function changedRecently(string $class, string $loggableType, string|int $loggableId): bool
+    /**
+     * @param  list<int>  $ids
+     */
+    private static function delete(array $ids): int
+    {
+        return $ids === [] ? 0 : self::logModel()->newQuery()->whereKey($ids)->delete();
+    }
+
+    private static function logModel(): SystemLog
+    {
+        /** @var class-string<SystemLog> $model */
+        $model = config('system-log.database.model', SystemLog::class);
+
+        return new $model;
+    }
+
+    /**
+     * Read under a row lock on the primary, so the check holds for as long as the walk runs.
+     */
+    private static function changedRecently(string $class, string|int $loggableId): bool
     {
         if (! is_subclass_of($class, Model::class)) {
             return false;
@@ -177,7 +233,7 @@ final class Compactor
 
         $model = new $class;
         $column = $model->getUpdatedAtColumn();
-        $live = History::live($loggableType, $loggableId);
+        $live = $model->newQueryWithoutScopes()->lockForUpdate()->find($loggableId)?->getAttributes();
 
         return $model->usesTimestamps()
             && $column !== null

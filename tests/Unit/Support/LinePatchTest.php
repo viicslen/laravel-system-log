@@ -34,3 +34,13 @@ it('refuses a source the patch was not made from', function () {
 
     expect(LinePatch::apply("a\nz\n", $patch))->toBeNull();
 });
+
+it('never splits a multibyte character, so the patch stays valid json', function () {
+    $from = str_repeat('x', 50).'é'.str_repeat('y', 50);
+    $to = str_repeat('x', 50).'è'.str_repeat('y', 50);
+
+    $patch = LinePatch::make($from, $to);
+
+    expect(json_encode($patch))->not->toBeFalse()
+        ->and(LinePatch::apply($from, $patch))->toBe($to);
+});

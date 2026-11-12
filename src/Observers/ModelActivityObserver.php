@@ -118,7 +118,7 @@ class ModelActivityObserver
         // at zero.  The closure captures all local variables by value, so it
         // remains self-contained even after the model instance is GC'd.
 
-        \Illuminate\Support\defer(static function () use ($event, $attributes, $modified, $original, $context, $changedAt, $loggableType, $loggableId, $bridge, $scope): void {
+        $deferred = static function () use ($event, $attributes, $modified, $original, $context, $changedAt, $loggableType, $loggableId, $bridge, $scope): void {
             // Step 1 — Write the heavy payload to the database first.
             //
             // This bypasses the SQS 256 KB limit: the JSON payload (which can
@@ -159,9 +159,16 @@ class ModelActivityObserver
             // the correct (e.g. tenant) connection. Without a bridge the write
             // runs inline, preserving the previous behaviour.
             $bridge ? $bridge->restore($scope, $write) : $write();
-            // Unique per write: defer() replaces a callback with the same name, which dropped every
-            // save of a model but the last one in a request or job.
-        })->name('system-log.defer-log-'.++self::$sequence."-{$model->getKey()}-{$model->getMorphClass()}-{$event}")->always();
+        };
+
+        // Unique per write: defer() replaces a callback with the same name, which dropped every
+        // save of a model but the last one in a request or job.
+        $name = 'system-log.defer-log-'.++self::$sequence."-{$loggableId}-{$loggableType}-{$event}";
+        $register = static fn () => \Illuminate\Support\defer($deferred)->name($name)->always();
+
+        // A change its transaction rolls back never happened, so it is logged only once committed.
+        $connection = $model->getConnection();
+        $connection->transactionLevel() > 0 ? $connection->afterCommit($register) : $register();
     }
 
     /**

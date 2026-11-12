@@ -5,15 +5,16 @@ declare(strict_types=1);
 namespace ViicSlen\SystemLog\Console;
 
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Model;
 use ViicSlen\SystemLog\Models\SystemLog;
 use ViicSlen\SystemLog\Support\Compactor;
 use ViicSlen\SystemLog\Support\LogOptions;
 
 /**
- * Compacts every model configured with `compaction.enabled`, one chunk of loggables at a time.
+ * Compacts every model with `compaction.enabled`, globally or per model, one chunk of rows at a time.
  *
- * A loggable's eligible `updated` rows are gone once it is compacted, so each chunk query picks up
- * where the last left off and an interrupted run simply resumes on the next one.
+ * A loggable's eligible `updated` rows are gone once it is compacted, so an interrupted run simply
+ * resumes on the next one.
  */
 class CompactCommand extends Command
 {
@@ -25,13 +26,12 @@ class CompactCommand extends Command
 
     public function handle(): int
     {
-        $models = $this->option('model') ?: LogOptions::configuredModels();
         $chunk = max(1, (int) $this->option('chunk'));
 
-        foreach ($models as $class) {
+        foreach ($this->option('model') ?: $this->candidateModels() as $class) {
             $options = LogOptions::for($class);
 
-            if (! $options->compaction) {
+            if (! $options->compaction || ! is_subclass_of($class, Model::class)) {
                 continue;
             }
 
@@ -44,6 +44,24 @@ class CompactCommand extends Command
     }
 
     /**
+     * Configured models plus every stored type, so a global `compaction.enabled` covers models
+     * that have no entry of their own.
+     *
+     * @return list<string>
+     */
+    protected function candidateModels(): array
+    {
+        /** @var class-string<SystemLog> $model */
+        $model = config('system-log.database.model', SystemLog::class);
+        $stored = $model::query()->distinct()->pluck('loggable_type')->map(LogOptions::modelClass(...))->all();
+
+        return array_values(array_unique([...LogOptions::configuredModels(), ...$stored]));
+    }
+
+    /**
+     * Walks the old `updated` rows once, oldest first, on the (`event`, `created_at`) index. A
+     * model skipped for changing too recently keeps its rows; the keyset moves past them.
+     *
      * @return array{int, int}
      */
     protected function compactModel(string $class, LogOptions $options, int $chunk): array
@@ -51,28 +69,37 @@ class CompactCommand extends Command
         $type = LogOptions::morphClass($class);
         // Whole months only: a month is compacted once, after its last day passes the window.
         $before = now()->subDays($options->compactAfterDays)->startOfMonth();
+        /** @var class-string<SystemLog> $model */
+        $model = config('system-log.database.model', SystemLog::class);
+        // A compacted model's old rows are gone, so only skipped ones can come up again.
         $skipped = [];
+        $last = null;
         $compacted = 0;
         $removed = 0;
 
         do {
-            /** @var class-string<SystemLog> $model */
-            $model = config('system-log.database.model', SystemLog::class);
-
-            $ids = $model::query()
-                ->where('loggable_type', $type)
+            $rows = $model::query()
+                ->toBase()
                 ->where('event', 'updated')
                 ->where('created_at', '<', $before)
-                ->when($skipped !== [], fn ($query) => $query->whereNotIn('loggable_id', $skipped))
-                ->distinct()
+                ->when($last !== null, fn ($query) => $query->where(fn ($query) => $query
+                    ->where('created_at', '>', $last->created_at)
+                    ->orWhere(fn ($query) => $query->where('created_at', $last->created_at)->where('id', '>', $last->id))))
+                ->where('loggable_type', $type)
+                ->orderBy('created_at')
+                ->orderBy('id')
                 ->limit($chunk)
-                ->pluck('loggable_id');
+                ->get(['id', 'created_at', 'loggable_id']);
 
-            foreach ($ids as $id) {
+            foreach ($rows->pluck('loggable_id')->unique() as $id) {
+                if (isset($skipped[$id])) {
+                    continue;
+                }
+
                 $result = Compactor::compact($type, $id, $before);
 
                 if ($result === null) {
-                    $skipped[] = $id;
+                    $skipped[$id] = true;
 
                     continue;
                 }
@@ -80,7 +107,9 @@ class CompactCommand extends Command
                 $compacted++;
                 $removed += $result;
             }
-        } while ($ids->isNotEmpty());
+
+            $last = $rows->last();
+        } while ($rows->count() === $chunk);
 
         return [$compacted, $removed];
     }

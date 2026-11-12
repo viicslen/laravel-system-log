@@ -16,7 +16,8 @@ namespace ViicSlen\SystemLog\Support;
  * - `json`: `{"$sl": "json", "set": {...}, "unset": [...]}` — only the top-level keys that
  *   changed, with their values on that side and the keys absent on that side.
  * - `patch`: `original` holds `{"$sl": "patch", "patch": ...}` turning the new value back into the
- *   old one (or the whole old value when that is not smaller); `modified` holds `{"$sl": "patch"}`.
+ *   old one (or the whole old value when that is not smaller); `modified` holds
+ *   `{"$sl": "patch", "n": ..., "h": ...}`, the new value's byte length and crc32b.
  */
 final class PayloadEncoder
 {
@@ -85,8 +86,8 @@ final class PayloadEncoder
     /**
      * The state before a row, given the state after it and the row's stored `original`.
      *
-     * A column whose earlier value cannot be recovered (omitted, or a patch that no longer fits
-     * the value it is applied to) is removed from the state rather than guessed.
+     * A column whose earlier value cannot be recovered (omitted, truncated, stored cast, or a patch
+     * that no longer fits the value it is applied to) is removed from the state rather than guessed.
      *
      * @param  array<string, mixed>  $state
      * @param  array<string, mixed>  $original
@@ -96,7 +97,13 @@ final class PayloadEncoder
     {
         foreach ($original as $column => $value) {
             if (! self::isEnvelope($value)) {
-                $state[$column] = $value;
+                // Full-mode rows stored `original` cast (arrays for JSON / money columns), which
+                // has no faithful raw form, so like a truncated value it is unrecoverable.
+                if (self::isWhole($value)) {
+                    $state[$column] = $value;
+                } else {
+                    unset($state[$column]);
+                }
 
                 continue;
             }
@@ -118,9 +125,91 @@ final class PayloadEncoder
         return $state;
     }
 
+    /**
+     * The state right after a row, given the state its newer rows rebuilt and the values the row
+     * stored (its `modified`, or its snapshot). Whole values are taken as stored; a JSON diff is
+     * applied; a patched column is kept only if it is the value the row wrote (a concurrent save
+     * from a stale instance can leave it otherwise) and dropped as unknown if not.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $stored
+     * @return array<string, mixed>
+     */
+    public static function redo(array $state, array $stored): array
+    {
+        foreach ($stored as $column => $value) {
+            if (self::isWhole($value)) {
+                $state[$column] = $value;
+
+                continue;
+            }
+
+            if (! self::isEnvelope($value)) {
+                continue;
+            }
+
+            $current = $state[$column] ?? null;
+            $matches = match ($value[self::MARKER]) {
+                self::PATCH => ! isset($value['h']) || (is_string($current) && strlen($current) === $value['n'] && hash('crc32b', $current) === $value['h']),
+                self::JSON => ($current = self::applyJson($current, $value)) !== null,
+                default => true,
+            };
+
+            if (! $matches) {
+                unset($state[$column]);
+            } elseif ($value[self::MARKER] === self::JSON) {
+                $state[$column] = $current;
+            }
+        }
+
+        return $state;
+    }
+
+    /**
+     * One column's stored value after `$newer`, given an older stored value of it: a JSON diff lays
+     * its keys over the older value (or the older diff's other keys); anything else stands alone.
+     */
+    public static function over(mixed $newer, mixed $older): mixed
+    {
+        if (! self::isEnvelope($newer) || $newer[self::MARKER] !== self::JSON) {
+            return $newer;
+        }
+
+        if (self::isWhole($older)) {
+            return self::applyJson($older, $newer) ?? $newer;
+        }
+
+        if (! self::isEnvelope($older) || $older[self::MARKER] !== self::JSON) {
+            return $newer;
+        }
+
+        $set = (array) ($newer['set'] ?? []);
+        $unset = $newer['unset'] ?? [];
+        $touched = array_flip([...array_keys($set), ...$unset]);
+
+        return self::envelope(self::JSON) + [
+            'set' => (object) ($set + array_diff_key((array) ($older['set'] ?? []), $touched)),
+            'unset' => array_values([...$unset, ...array_filter($older['unset'] ?? [], static fn (int|string $key): bool => ! isset($touched[$key]))]),
+        ];
+    }
+
     public static function isEnvelope(mixed $value): bool
     {
         return is_array($value) && isset($value[self::MARKER]);
+    }
+
+    /**
+     * Whether a stored value is the attribute's raw value itself: not an envelope, not truncated,
+     * and not a cast value nested in an array.
+     */
+    public static function isWhole(mixed $value): bool
+    {
+        return ! is_array($value) && ! self::isTruncated($value);
+    }
+
+    private static function isTruncated(mixed $value): bool
+    {
+        return is_string($value) && str_ends_with($value, self::TRUNCATED);
     }
 
     /**
@@ -189,8 +278,9 @@ final class PayloadEncoder
         $oldArray = is_string($old) ? json_decode($old, true) : null;
         $newArray = is_string($new) ? json_decode($new, true) : null;
 
+        // Nothing to diff (null, a scalar or invalid JSON on one side): keep both values whole.
         if (! is_array($oldArray) || ! is_array($newArray)) {
-            return [self::truncate($new, $options->maxValueLength), self::truncate($old, $options->maxValueLength)];
+            return [$new, $old];
         }
 
         $changed = array_keys(array_filter(
@@ -250,16 +340,18 @@ final class PayloadEncoder
             return [$new, $old];
         }
 
+        $modified = self::envelope(self::PATCH) + ['n' => strlen($new), 'h' => hash('crc32b', $new)];
+
         if (! is_string($old)) {
-            return [self::envelope(self::PATCH), $old];
+            return [$modified, $old];
         }
 
-        $patch = LinePatch::make($new, $old);
-        $encoded = self::envelope(self::PATCH) + ['patch' => $patch];
+        $encoded = self::envelope(self::PATCH) + ['patch' => LinePatch::make($new, $old)];
+        $json = json_encode($encoded);
 
         return [
-            self::envelope(self::PATCH),
-            strlen((string) json_encode($encoded)) < strlen($old) ? $encoded : $old,
+            $modified,
+            $json !== false && strlen($json) < strlen($old) ? $encoded : $old,
         ];
     }
 

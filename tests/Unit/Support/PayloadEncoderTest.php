@@ -58,7 +58,7 @@ it('stores a reverse patch and undoes it', function () {
 
     [$modified, $original] = PayloadEncoder::change($options, ['body' => $old], ['body' => $new]);
 
-    expect($modified['body'])->toBe(['$sl' => 'patch'])
+    expect($modified['body'])->toBe(['$sl' => 'patch', 'n' => strlen($new), 'h' => hash('crc32b', $new)])
         ->and($original['body']['$sl'])->toBe('patch')
         ->and(PayloadEncoder::undo(['body' => $new], $original)['body'])->toBe($old);
 });
@@ -84,3 +84,14 @@ it('drops excluded columns', function () {
     expect(PayloadEncoder::change(encoderOptions(exclude: ['views']), ['views' => 1, 'a' => 1], ['views' => 2, 'a' => 2]))
         ->toBe([['a' => 2], ['a' => 1]]);
 });
+
+it('keeps both values whole when a long json value changes to or from something it cannot diff', function (?string $old, ?string $new) {
+    [$modified, $original] = PayloadEncoder::change(encoderOptions(['columns' => ['data' => 'json']]), ['data' => $old], ['data' => $new]);
+
+    expect($modified['data'])->toBe($new)
+        ->and(PayloadEncoder::undo(['data' => $new], $original))->toBe(['data' => $old]);
+})->with([
+    'json to null' => ['{"long":"'.str_repeat('l', 20).'"}', null],
+    'null to json' => [null, '{"long":"'.str_repeat('l', 20).'"}'],
+    'json to a scalar string' => ['{"long":"'.str_repeat('l', 20).'"}', str_repeat('s', 20)],
+]);
