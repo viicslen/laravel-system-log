@@ -179,6 +179,7 @@ large payloads to this job — the entire point is to stay under queue message s
 | `input_except`              | `['password', …]`        | Request keys stripped from metadata                                                                       |
 | `payload.mode`              | `full`                   | `diff` stores only `modified`/`original` on updates; past states are rebuilt (`History`)                  |
 | `payload.snapshot_created` / `snapshot_deleted` | `true` | In `diff` mode, whether created / deleted rows keep a snapshot                                   |
+| `payload.snapshot_every`    | `0`                      | In `diff` mode, an update row keeps a full snapshot when none of the model's last N - 1 rows has one; `SYSTEM_LOG_SNAPSHOT_EVERY` |
 | `exclude`                   | `[]`                     | Columns never logged; an update touching only these writes no row                                         |
 | `attributes.max_value_length` | `1000`                 | Values longer than this go through a long-value strategy                                                  |
 | `attributes.strategy` / `columns` / `casts` | `truncate` | `truncate`, `omit`, `json` (changed keys only) or `patch` (reverse patch), globally / per column / per cast |

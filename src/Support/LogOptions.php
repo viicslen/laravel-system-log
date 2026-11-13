@@ -35,6 +35,7 @@ final readonly class LogOptions
         public int $compactAfterDays,
         public bool $prune,
         public int $retentionDays,
+        public int $snapshotEvery = 0,
     ) {}
 
     /**
@@ -63,6 +64,7 @@ final readonly class LogOptions
             compactAfterDays: (int) $get('compaction.after_days', 60),
             prune: (bool) $get('prune.enabled', true) && $retention > 0,
             retentionDays: $retention,
+            snapshotEvery: max(0, (int) $get('payload.snapshot_every', 0)),
         );
     }
 

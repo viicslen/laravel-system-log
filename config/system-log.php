@@ -45,11 +45,16 @@ return [
     |
     | snapshot_created / snapshot_deleted : in `diff` mode, whether created /
     | deleted rows still keep a snapshot. `full` mode always keeps one.
+    |
+    | snapshot_every : in `diff` mode, an update row also keeps a full snapshot
+    | when none of the model's previous N - 1 rows holds one, which bounds how
+    | far a rebuild leans on diffs. 0 turns it off.
     */
     'payload' => [
         'mode' => env('SYSTEM_LOG_PAYLOAD_MODE', 'full'),
         'snapshot_created' => true,
         'snapshot_deleted' => true,
+        'snapshot_every' => (int) env('SYSTEM_LOG_SNAPSHOT_EVERY', 0),
     ],
 
     /*

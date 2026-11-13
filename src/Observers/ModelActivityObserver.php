@@ -44,7 +44,10 @@ class ModelActivityObserver
         if ($options->mode === LogOptions::DIFF) {
             [$modified, $original] = PayloadEncoder::change($options, $model->getRawOriginal(), $changes, $model->getCasts());
 
-            $this->log($model, 'updated', modified: $modified, original: $original);
+            $this->log($model, 'updated', modified: $modified, original: $original,
+                periodic: $options->snapshotEvery > 0 ? $this->snapshot($model, $options, true) : null,
+                every: $options->snapshotEvery,
+            );
 
             return;
         }
@@ -86,7 +89,10 @@ class ModelActivityObserver
     // Core Logic
     // -------------------------------------------------------------------------
 
-    private function log(Model $model, string $event, ?array $attributes = null, ?array $modified = null, ?array $original = null): void
+    /**
+     * @param  array<string, mixed>|null  $periodic  a snapshot stored only when none of the model's last `$every - 1` rows holds one
+     */
+    private function log(Model $model, string $event, ?array $attributes = null, ?array $modified = null, ?array $original = null, ?array $periodic = null, int $every = 0): void
     {
         // ── SYNCHRONOUS CAPTURE ───────────────────────────────────────────────
         // Everything here runs inside the current request cycle.
@@ -118,16 +124,29 @@ class ModelActivityObserver
         // at zero.  The closure captures all local variables by value, so it
         // remains self-contained even after the model instance is GC'd.
 
-        $deferred = static function () use ($event, $attributes, $modified, $original, $context, $changedAt, $loggableType, $loggableId, $bridge, $scope): void {
+        $deferred = static function () use ($event, $attributes, $modified, $original, $periodic, $every, $context, $changedAt, $loggableType, $loggableId, $bridge, $scope): void {
             // Step 1 — Write the heavy payload to the database first.
             //
             // This bypasses the SQS 256 KB limit: the JSON payload (which can
             // be several hundred KB for large model diffs) never enters the
             // queue.  The queue job receives only a lightweight integer log ID.
 
-            $write = static function () use ($event, $attributes, $modified, $original, $context, $changedAt, $loggableType, $loggableId): void {
-                /** @var class-string<Model> $modelClass */
+            $write = static function () use ($event, $attributes, $modified, $original, $periodic, $every, $context, $changedAt, $loggableType, $loggableId): void {
+                /** @var class-string<SystemLog> $modelClass */
                 $modelClass = config('system-log.database.model', SystemLog::class);
+
+                // Decided at write time: deferred writes land in order, so the rows before this one exist.
+                if ($periodic !== null && ($every === 1 || ! $modelClass::query()
+                    ->where('loggable_type', $loggableType)
+                    ->where('loggable_id', $loggableId)
+                    ->orderByDesc('id')
+                    ->limit($every - 1)
+                    ->toBase()
+                    ->selectRaw('attributes is not null as anchored')
+                    ->pluck('anchored')
+                    ->contains(static fn (mixed $anchored): bool => (bool) $anchored))) {
+                    $attributes = $periodic;
+                }
 
                 /** @var SystemLog $log */
                 $log = $modelClass::forceCreate([

@@ -611,3 +611,24 @@ it('pins each json key of a run end to its newest stored change', function () {
 
     expect(json_decode($model->systemLogStateAt(Carbon::parse('2026-01-31'))['data'], true))->toBe(['x' => 1, 'y' => 1, 'pad' => $pad]);
 });
+
+it('keeps a full snapshot every n rows in diff mode when asked', function (int $every, array $anchored) {
+    config(['system-log.models.'.HistoryModel::class.'.payload.snapshot_every' => $every]);
+
+    logged(function () use (&$model) {
+        $model = HistoryModel::create(['name' => 'n0']);
+    });
+
+    foreach (range(1, 6) as $i) {
+        logged(fn () => $model->update(['name' => "n{$i}"]));
+    }
+
+    $rows = SystemLog::query()->where('event', 'updated')->orderBy('id')->get();
+
+    expect($rows->map(fn (SystemLog $row) => $row->storedAttributes() !== null)->all())->toBe($anchored)
+        ->and($rows->last()->storedAttributes()['name'] ?? null)->toBe($anchored[5] ? 'n6' : null)
+        ->and(comparable($model->systemLogStateAt(now())))->toEqual(comparable($model->fresh()->getAttributes()));
+})->with([
+    'off' => [0, [false, false, false, false, false, false]],
+    'every 3' => [3, [false, false, true, false, false, true]],
+]);
