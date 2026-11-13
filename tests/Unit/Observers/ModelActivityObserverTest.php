@@ -126,6 +126,25 @@ it('creates a log entry on model updated event with changes', function () {
         ->and($log->original)->toBeArray();
 });
 
+it('stores only modified and original on updates in diff mode', function () {
+    Queue::fake();
+    config(['system-log.payload.mode' => 'diff']);
+
+    $model = makeTestModel(['name' => 'Dana', 'email' => 'dana@example.com']);
+    $model->id = 4;
+    $model->syncOriginal();
+    $model->setAttribute('name', 'Danielle');
+    $model->syncChanges();
+
+    (new ModelActivityObserver)->updated($model);
+    app(DeferredCallbackCollection::class)->invoke();
+
+    $log = SystemLog::first();
+    expect($log->getRawOriginal('attributes'))->toBeNull()
+        ->and($log->modified)->toBe(['name' => 'Danielle'])
+        ->and($log->original)->toBe(['name' => 'Dana']);
+});
+
 it('skips creating a log when model updated has no changes', function () {
     Queue::fake();
 

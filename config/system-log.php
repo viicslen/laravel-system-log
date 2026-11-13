@@ -37,19 +37,80 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Payload
+    |--------------------------------------------------------------------------
+    | mode : `full` stores a full `attributes` snapshot on every row. `diff`
+    | stores only `modified` / `original` on updates; past states are rebuilt
+    | on read (HasSystemLogs::systemLogStateAt()).
+    |
+    | snapshot_created / snapshot_deleted : in `diff` mode, whether created /
+    | deleted rows still keep a snapshot. `full` mode always keeps one.
+    |
+    | snapshot_every : in `diff` mode, an update row also keeps a full snapshot
+    | when none of the model's previous N - 1 rows holds one, which bounds how
+    | far a rebuild leans on diffs. 0 turns it off.
+    */
+    'payload' => [
+        'mode' => env('SYSTEM_LOG_PAYLOAD_MODE', 'full'),
+        'snapshot_created' => true,
+        'snapshot_deleted' => true,
+        'snapshot_every' => (int) env('SYSTEM_LOG_SNAPSHOT_EVERY', 0),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Excluded Columns
+    |--------------------------------------------------------------------------
+    | Columns never logged. An update that only changes these (plus the updated
+    | timestamp) writes no row at all.
+    */
+    'exclude' => [],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Compaction
+    |--------------------------------------------------------------------------
+    | When enabled, `system-log:compact` merges a model's update rows older than
+    | `after_days` into one `compacted` row per calendar month. A model with
+    | compaction enabled is never pruned by age.
+    */
+    'compaction' => [
+        'enabled' => false,
+        'after_days' => 60,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Pruning
     |--------------------------------------------------------------------------
-    | retention_days : log rows older than this many days are deleted (in
-    | batches) by Laravel's `model:prune` command. Set to 0 (or negative) to
-    | disable pruning entirely. Schedule pruning in the host app, e.g.:
+    | Rows older than `retention_days` are deleted (in batches) by Laravel's
+    | `model:prune` command. Set `enabled` to false, or the retention to 0 (or
+    | negative), to disable pruning. Schedule pruning in the host app, e.g.:
     |
     |   Schedule::command('model:prune', [
     |       '--model' => [\ViicSlen\SystemLog\Models\SystemLog::class],
     |   ])->daily();
     */
     'prune' => [
+        'enabled' => true,
         'retention_days' => env('SYSTEM_LOG_RETENTION_DAYS', 60),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Per-Model Overrides
+    |--------------------------------------------------------------------------
+    | Keyed by model class; each entry overrides any of `payload`, `exclude`,
+    | `attributes`, `compaction` and `prune` for that model, e.g.:
+    |
+    |   App\Models\Post::class => [
+    |       'payload' => ['mode' => 'diff'],
+    |       'exclude' => ['view_count'],
+    |       'attributes' => ['columns' => ['body' => 'patch']],
+    |       'compaction' => ['enabled' => true],
+    |   ],
+    */
+    'models' => [],
 
     /*
     |--------------------------------------------------------------------------
@@ -105,16 +166,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Payload Value Truncation
+    | Long Values
     |--------------------------------------------------------------------------
-    | max_value_length : any string value in the attributes / modified /
-    | original JSON payload longer than this many characters is truncated (a
-    | "…[truncated]" marker is appended) before the row is written. This caps
-    | the row size when a model has a large text column (e.g. an HTML
-    | description). Set to null to disable truncation and store full values.
+    | max_value_length : string values longer than this many characters go
+    | through a strategy before the row is written. Null disables strategies
+    | and stores every value whole.
+    |
+    | strategy : the default for long values —
+    |   truncate : cut to the limit with a "…[truncated]" marker (lossy)
+    |   omit     : record that the column changed, but not its value
+    |   json     : store only the top-level JSON keys that changed
+    |   patch    : store a reverse patch (new → old), or the whole old value
+    |              when the patch is not smaller
+    |
+    | columns / casts : per-column, or per cast type (e.g. 'array'), strategy.
     */
     'attributes' => [
         'max_value_length' => env('SYSTEM_LOG_MAX_VALUE_LENGTH', 1000),
+        'strategy' => 'truncate',
+        'columns' => [],
+        'casts' => [],
     ],
 
     /*
