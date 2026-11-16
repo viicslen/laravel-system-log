@@ -85,6 +85,19 @@ it('drops excluded columns', function () {
         ->toBe([['a' => 2], ['a' => 1]]);
 });
 
+it('keeps an empty json side whole, so undo and redo restore {} or [] exactly', function (string $empty) {
+    $options = encoderOptions(['columns' => ['data' => 'json']]);
+    $full = '{"long":"'.str_repeat('l', 20).'"}';
+
+    [$modified, $original] = PayloadEncoder::change($options, ['data' => $empty], ['data' => $full]);
+    [$cleared, $before] = PayloadEncoder::change($options, ['data' => $full], ['data' => $empty]);
+
+    expect(PayloadEncoder::undo(['data' => $full], $original))->toBe(['data' => $empty])
+        ->and(PayloadEncoder::redo(['data' => $full], $cleared))->toBe(['data' => $empty])
+        ->and(json_decode(PayloadEncoder::undo(['data' => $empty], $before)['data'], true))->toBe(json_decode($full, true))
+        ->and(json_decode(PayloadEncoder::redo(['data' => $empty], $modified)['data'], true))->toBe(json_decode($full, true));
+})->with(['object' => '{}', 'list' => '[]']);
+
 it('keeps both values whole when a long json value changes to or from something it cannot diff', function (?string $old, ?string $new) {
     [$modified, $original] = PayloadEncoder::change(encoderOptions(['columns' => ['data' => 'json']]), ['data' => $old], ['data' => $new]);
 
