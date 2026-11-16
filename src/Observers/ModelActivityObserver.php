@@ -10,50 +10,89 @@ use ViicSlen\SystemLog\DTO\ExecutionContext;
 use ViicSlen\SystemLog\Enums\LogStatus;
 use ViicSlen\SystemLog\Jobs\ProcessLogContext;
 use ViicSlen\SystemLog\Models\SystemLog;
+use ViicSlen\SystemLog\Support\LogOptions;
+use ViicSlen\SystemLog\Support\PayloadEncoder;
 
 class ModelActivityObserver
 {
+    private static int $sequence = 0;
+
     // -------------------------------------------------------------------------
     // Event Handlers
     // -------------------------------------------------------------------------
 
     public function created(Model $model): void
     {
-        // Snapshot the full attribute set of the newly created model.
-        $this->log($model, 'created', attributes: $model->getAttributes());
+        $options = LogOptions::for($model);
+
+        $this->log($model, 'created', attributes: $this->snapshot($model, $options, $options->snapshotCreated));
     }
 
     public function updated(Model $model): void
     {
-        // getChanges() returns only the columns that actually changed.
-        // Skip entirely if Eloquent fired the event with no real changes
-        // (e.g. touch() calls that only update timestamps).
-        $changes = $model->getChanges();
+        $options = LogOptions::for($model);
 
-        if (empty($changes)) {
+        // getChanges() returns only the columns that actually changed. Skip the
+        // row when nothing but excluded columns (and the timestamp riding along
+        // with them) changed, e.g. touch() calls.
+        $changes = PayloadEncoder::withoutExcluded($options, $model->getChanges());
+
+        if (array_diff_key($changes, array_flip(array_filter([$model->getUpdatedAtColumn()]))) === []) {
             return;
         }
 
-        // Pair the new values with the originals so that each changed column
-        // can be diffed in a single query on the log record.
+        if ($options->mode === LogOptions::DIFF) {
+            [$modified, $original] = PayloadEncoder::change($options, $model->getRawOriginal(), $changes, $model->getCasts());
+
+            $this->log($model, 'updated', modified: $modified, original: $original,
+                periodic: $options->snapshotEvery > 0 ? $this->snapshot($model, $options, true) : null,
+                every: $options->snapshotEvery,
+            );
+
+            return;
+        }
+
+        [$modified, $original] = PayloadEncoder::change(
+            $options,
+            array_intersect_key($model->getOriginal(), $changes),
+            $changes,
+            $model->getCasts(),
+        );
+
         $this->log($model, 'updated',
-            attributes: $model->getAttributes(),
-            modified: $changes,
-            original: array_intersect_key($model->getOriginal(), $changes),
+            attributes: $this->snapshot($model, $options, true),
+            modified: $modified,
+            original: $original,
         );
     }
 
     public function deleted(Model $model): void
     {
-        // Capture the full attribute snapshot before the row disappears.
-        $this->log($model, 'deleted', attributes: $model->getAttributes());
+        $options = LogOptions::for($model);
+
+        $this->log($model, 'deleted', attributes: $this->snapshot($model, $options, $options->snapshotDeleted));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function snapshot(Model $model, LogOptions $options, bool $keep): ?array
+    {
+        if ($options->mode === LogOptions::DIFF && ! $keep) {
+            return null;
+        }
+
+        return PayloadEncoder::snapshot($options, $model->getAttributes(), $model->getCasts());
     }
 
     // -------------------------------------------------------------------------
     // Core Logic
     // -------------------------------------------------------------------------
 
-    private function log(Model $model, string $event, ?array $attributes = null, ?array $modified = null, ?array $original = null): void
+    /**
+     * @param  array<string, mixed>|null  $periodic  a snapshot stored only when none of the model's last `$every - 1` rows holds one
+     */
+    private function log(Model $model, string $event, ?array $attributes = null, ?array $modified = null, ?array $original = null, ?array $periodic = null, int $every = 0): void
     {
         // ── SYNCHRONOUS CAPTURE ───────────────────────────────────────────────
         // Everything here runs inside the current request cycle.
@@ -65,18 +104,10 @@ class ModelActivityObserver
         // We intentionally do NOT write to the DB or dispatch jobs here —
         // that would add latency to the user's TTFB.
 
-        // Cap oversized string values so a single wide/long-text column (e.g.
-        // an HTML description) can't bloat the stored JSON payload. Applies to
-        // every payload column; a null length disables truncation.
-        $maxLength = config('system-log.attributes.max_value_length');
-
-        if ($maxLength !== null) {
-            $attributes = self::truncateValues($attributes, (int) $maxLength);
-            $modified = self::truncateValues($modified, (int) $maxLength);
-            $original = self::truncateValues($original, (int) $maxLength);
-        }
-
         $context = ExecutionContext::capture();
+        // The change's own time, not the deferred insert's: two requests can finish their deferred
+        // writes in the reverse order of the changes they log.
+        $changedAt = now();
         $loggableType = $model->getMorphClass();
         $loggableId = (string) $model->getKey();
 
@@ -93,19 +124,32 @@ class ModelActivityObserver
         // at zero.  The closure captures all local variables by value, so it
         // remains self-contained even after the model instance is GC'd.
 
-        \Illuminate\Support\defer(static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId, $bridge, $scope): void {
+        $deferred = static function () use ($event, $attributes, $modified, $original, $periodic, $every, $context, $changedAt, $loggableType, $loggableId, $bridge, $scope): void {
             // Step 1 — Write the heavy payload to the database first.
             //
             // This bypasses the SQS 256 KB limit: the JSON payload (which can
             // be several hundred KB for large model diffs) never enters the
             // queue.  The queue job receives only a lightweight integer log ID.
 
-            $write = static function () use ($event, $attributes, $modified, $original, $context, $loggableType, $loggableId): void {
-                /** @var class-string<Model> $modelClass */
+            $write = static function () use ($event, $attributes, $modified, $original, $periodic, $every, $context, $changedAt, $loggableType, $loggableId): void {
+                /** @var class-string<SystemLog> $modelClass */
                 $modelClass = config('system-log.database.model', SystemLog::class);
 
+                // Decided at write time: deferred writes land in order, so the rows before this one exist.
+                if ($periodic !== null && ($every === 1 || ! $modelClass::query()
+                    ->where('loggable_type', $loggableType)
+                    ->where('loggable_id', $loggableId)
+                    ->orderByDesc('id')
+                    ->limit($every - 1)
+                    ->toBase()
+                    ->selectRaw('attributes is not null as anchored')
+                    ->pluck('anchored')
+                    ->contains(static fn (mixed $anchored): bool => (bool) $anchored))) {
+                    $attributes = $periodic;
+                }
+
                 /** @var SystemLog $log */
-                $log = $modelClass::create([
+                $log = $modelClass::forceCreate([
                     'loggable_type' => $loggableType,
                     'loggable_id' => $loggableId,
                     'event' => $event,
@@ -113,6 +157,8 @@ class ModelActivityObserver
                     'modified' => $modified,
                     'original' => $original,
                     'status' => LogStatus::Pending,
+                    'created_at' => $changedAt,
+                    'changed_at_micros' => (int) $changedAt->format('Uu'),
                 ]);
 
                 // Step 2 — Dispatch the lightweight job that enriches the log
@@ -132,30 +178,16 @@ class ModelActivityObserver
             // the correct (e.g. tenant) connection. Without a bridge the write
             // runs inline, preserving the previous behaviour.
             $bridge ? $bridge->restore($scope, $write) : $write();
-        })->name("system-log.defer-log-{$model->getKey()}-{$model->getMorphClass()}-{$event}")->always();
-    }
+        };
 
-    /**
-     * Recursively truncate string values longer than $max characters, appending
-     * a marker so truncation is visible in the stored payload. Non-string
-     * scalars and nested array structure are preserved.
-     *
-     * @param  array<string, mixed>|null  $data
-     * @return array<string, mixed>|null
-     */
-    private static function truncateValues(?array $data, int $max): ?array
-    {
-        if ($data === null || $max <= 0) {
-            return $data;
-        }
+        // Unique per write: defer() replaces a callback with the same name, which dropped every
+        // save of a model but the last one in a request or job.
+        $name = 'system-log.defer-log-'.++self::$sequence."-{$loggableId}-{$loggableType}-{$event}";
+        $register = static fn () => \Illuminate\Support\defer($deferred)->name($name)->always();
 
-        array_walk_recursive($data, static function (mixed &$value) use ($max): void {
-            if (is_string($value) && mb_strlen($value) > $max) {
-                $value = mb_substr($value, 0, $max).'…[truncated]';
-            }
-        });
-
-        return $data;
+        // A change its transaction rolls back never happened, so it is logged only once committed.
+        $connection = $model->getConnection();
+        $connection->transactionLevel() > 0 ? $connection->afterCommit($register) : $register();
     }
 
     /**

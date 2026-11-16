@@ -1,0 +1,23 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::connection(config('system-log.database.connection'))->table(config('system-log.database.table', 'system_logs'), function (Blueprint $table) {
+            // Microseconds since the epoch at the change; orders rows that share a `created_at` second.
+            $table->unsignedBigInteger('changed_at_micros')->nullable();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::connection(config('system-log.database.connection'))->table(config('system-log.database.table', 'system_logs'), function (Blueprint $table) {
+            $table->dropColumn('changed_at_micros');
+        });
+    }
+};

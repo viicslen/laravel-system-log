@@ -38,15 +38,18 @@ class TestCase extends Orchestra
 
     protected function defineDatabaseMigrations(): void
     {
-        $migration = include __DIR__.'/../database/migrations/create_system_logs_table.php.stub';
-
-        $migration->up();
+        foreach (['create_system_logs_table', 'add_changed_at_micros_to_system_logs_table', 'add_type_time_index_to_system_logs_table'] as $stub) {
+            (include __DIR__."/../database/migrations/{$stub}.php.stub")->up();
+        }
 
         // Auxiliary table used by test models
         $this->app['db']->connection()->getSchemaBuilder()->create('test_models', function (Blueprint $table) {
             $table->bigIncrements('id');
             $table->string('name');
             $table->string('email')->nullable();
+            $table->text('body')->nullable();
+            $table->text('data')->nullable();
+            $table->unsignedInteger('views')->default(0);
             $table->timestamps();
         });
     }

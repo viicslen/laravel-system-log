@@ -1,0 +1,22 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::connection(config('system-log.database.connection'))->table(config('system-log.database.table', 'system_logs'), function (Blueprint $table) {
+            $table->index(['loggable_type', 'created_at'], 'idx_system_logs_type_time');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::connection(config('system-log.database.connection'))->table(config('system-log.database.table', 'system_logs'), function (Blueprint $table) {
+            $table->dropIndex('idx_system_logs_type_time');
+        });
+    }
+};

@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace ViicSlen\SystemLog\Concerns;
 
+use DateTimeInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use ReflectionClass;
 use ViicSlen\SystemLog\Models\SystemLog;
 use ViicSlen\SystemLog\Observers\ModelActivityObserver;
+use ViicSlen\SystemLog\Support\History;
 
 /**
  * Drop this trait onto any Eloquent model to enable automatic activity logging.
@@ -58,6 +60,17 @@ trait HasSystemLogs
                 static::registerModelEvent($event, $observer.'@'.$event);
             }
         }
+    }
+
+    /**
+     * Raw attributes as they were right after a log row, or at a point in time, rebuilt from the
+     * live row and the newer log rows. Null when the model did not exist then.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function systemLogStateAt(SystemLog|DateTimeInterface $point): ?array
+    {
+        return History::stateAt($this->getMorphClass(), $this->getKey(), $point);
     }
 
     /**

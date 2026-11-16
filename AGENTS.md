@@ -24,8 +24,8 @@ backtrace, user ID, URL). This keeps TTFB at zero and stays under the SQS 256 KB
 |---------------------|-----------------------------------------|
 | Type                | Laravel package (not a full app)        |
 | Language            | PHP ≥ 8.2                               |
-| Framework           | Laravel 11 / illuminate/contracts ^11.0 |
-| Test runner         | Pest 3 via `orchestra/testbench` 9      |
+| Framework           | Laravel 11–13 / illuminate/contracts ^11.0\|^12.0\|^13.0 |
+| Test runner         | Pest 4 via `orchestra/testbench` 9–11   |
 | Linter/formatter    | Laravel Pint 1                          |
 | Package helper      | spatie/laravel-package-tools ^1.14      |
 | PHP runtime (local) | PHP 8.4                                 |
@@ -58,6 +58,8 @@ composer.json                       — Package manifest; defines autoload, scri
 config/system-log.php               — Published config (enabled, database, queue, backtrace, input_except)
 database/migrations/
   create_system_logs_table.php.stub — Stub migration published to host app
+  add_changed_at_micros_to_system_logs_table.php.stub — Upgrade: nullable `changed_at_micros`; existing hosts must publish and run it before deploying the observer that writes it
+  add_type_time_index_to_system_logs_table.php.stub — Upgrade: (`loggable_type`, `created_at`) index that per-type pruning reads
 src/
   SystemLogServiceProvider.php      — Boot: registers config, migration, compiles backtrace glob patterns
   Concerns/HasSystemLogs.php        — Trait: add to any Eloquent model to enable logging
@@ -114,7 +116,7 @@ composer format -- --test
 - **Base class**: `tests/TestCase.php` extends `Orchestra\Testbench\TestCase`, registers
   `SystemLogServiceProvider`, uses SQLite in-memory via `RefreshDatabase`.
 - **Bootstrap**: `tests/Pest.php` applies `TestCase` to `Feature/` and `Unit/`.
-- **Database**: `defineDatabaseMigrations()` runs the stub migration and creates a `test_models`
+- **Database**: `defineDatabaseMigrations()` runs every stub migration and creates a `test_models`
   table used by in-test model stubs.
 - **Queue**: `system-log.queue.connection = sync` in tests — jobs run synchronously and can be
   asserted immediately after the triggering model event.
@@ -175,6 +177,15 @@ large payloads to this job — the entire point is to stay under queue message s
 | `backtrace.skip_paths`      | `['vendor/', 'artisan']` | Glob patterns to exclude from trace                                                                       |
 | `backtrace.include_paths`   | `[]`                     | Glob patterns to rescue frames from skip list                                                             |
 | `input_except`              | `['password', …]`        | Request keys stripped from metadata                                                                       |
+| `payload.mode`              | `full`                   | `diff` stores only `modified`/`original` on updates; past states are rebuilt (`History`)                  |
+| `payload.snapshot_created` / `snapshot_deleted` | `true` | In `diff` mode, whether created / deleted rows keep a snapshot                                   |
+| `payload.snapshot_every`    | `0`                      | In `diff` mode, an update row keeps a full snapshot when none of the model's last N - 1 rows has one; `SYSTEM_LOG_SNAPSHOT_EVERY` |
+| `exclude`                   | `[]`                     | Columns never logged; an update touching only these writes no row                                         |
+| `attributes.max_value_length` | `1000`                 | Values longer than this go through a long-value strategy                                                  |
+| `attributes.strategy` / `columns` / `casts` | `truncate` | `truncate`, `omit`, `json` (changed keys only) or `patch` (reverse patch), globally / per column / per cast |
+| `compaction.enabled` / `after_days` | `false` / `60`   | `system-log:compact` merges update rows into one row per model per month; never pruned by age             |
+| `prune.enabled` / `retention_days` | `true` / `60`     | Age pruning via `model:prune`                                                                             |
+| `models`                    | `[]`                     | Per-model overrides of the keys above, keyed by model class                                               |
 
 ## LogStatus Enum
 
