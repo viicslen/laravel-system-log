@@ -291,7 +291,11 @@ final class PayloadEncoder
             ARRAY_FILTER_USE_BOTH,
         ));
 
-        return [self::jsonSide($newArray, $changed), self::jsonSide($oldArray, $changed)];
+        // An empty side is kept whole: a diff applied down to nothing cannot tell `{}` from `[]`.
+        return [
+            $newArray === [] ? $new : self::jsonSide($newArray, $changed),
+            $oldArray === [] ? $old : self::jsonSide($oldArray, $changed),
+        ];
     }
 
     /**
